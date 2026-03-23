@@ -2,7 +2,7 @@
 
 A Dash (Plotly) dashboard for analyzing IMC Prosperity-style algorithmic trading log files. Visualizes order book snapshots, trade executions, PnL, net position, and algorithm debug logs in a single interactive view.
 
-![Dashboard Screenshot](example-dash.png)
+
 
 ## Quick Start
 
