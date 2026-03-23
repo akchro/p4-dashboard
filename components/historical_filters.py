@@ -31,6 +31,14 @@ def layout():
             inputStyle={"marginRight": "4px"},
         ),
         html.Br(),
+        html.Label("Volume Filter", style={"fontWeight": "bold"}),
+        dcc.Checklist(
+            id="hist-volume-our-trades-toggle",
+            options=[{"label": "Include Our Trades", "value": "include"}],
+            value=["include"],
+            inputStyle={"marginRight": "4px"},
+        ),
+        html.Br(),
         html.Label("Qty Filter", style={"fontWeight": "bold"}),
         dcc.RangeSlider(
             id="hist-qty-filter",
