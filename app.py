@@ -26,25 +26,25 @@ CELL_STYLE = {
 live_tab = html.Div(style={
     "display": "grid",
     "gridTemplateColumns": "3fr 1fr",
-    "gridTemplateRows": "50vh 16vh 16vh 14vh",
-    "height": "calc(100vh - 60px)",
+    "gridTemplateRows": "60vh 40vh 25vh 25vh",
     "gap": "2px",
     "padding": "4px",
 }, children=[
     html.Div(main_chart.layout(), style={
         **CELL_STYLE, "gridColumn": "1", "gridRow": "1",
     }),
-    html.Div(pnl_chart.layout(), style={
+    html.Div(volume_chart.layout(), style={
         **CELL_STYLE, "gridColumn": "1", "gridRow": "2",
     }),
-    html.Div(position_chart.layout(), style={
+    html.Div(pnl_chart.layout(), style={
         **CELL_STYLE, "gridColumn": "1", "gridRow": "3",
     }),
-    html.Div(volume_chart.layout(), style={
+    html.Div(position_chart.layout(), style={
         **CELL_STYLE, "gridColumn": "1", "gridRow": "4",
     }),
     html.Div(style={
         **SIDEBAR_STYLE, "gridColumn": "2", "gridRow": "1 / 5",
+        "position": "sticky", "top": "40px", "height": "calc(100vh - 60px)",
     }, children=[
         log_viewer.layout(),
         html.Hr(),
@@ -59,8 +59,7 @@ live_tab = html.Div(style={
 historical_tab = html.Div(style={
     "display": "grid",
     "gridTemplateColumns": "3fr 1fr",
-    "gridTemplateRows": "70vh 26vh",
-    "height": "calc(100vh - 60px)",
+    "gridTemplateRows": "60vh 40vh",
     "gap": "2px",
     "padding": "4px",
 }, children=[
@@ -72,6 +71,7 @@ historical_tab = html.Div(style={
     }),
     html.Div(style={
         **SIDEBAR_STYLE, "gridColumn": "2", "gridRow": "1 / 3",
+        "position": "sticky", "top": "40px", "height": "calc(100vh - 60px)",
     }, children=[
         historical_controls.layout(),
         html.Hr(),
@@ -83,7 +83,6 @@ historical_tab = html.Div(style={
 
 app.layout = html.Div(style={
     "fontFamily": "Arial, sans-serif",
-    "height": "100vh",
 }, children=[
     dcc.Tabs(id="mode-tabs", value="live", children=[
         dcc.Tab(label="Live", value="live", children=[live_tab]),
