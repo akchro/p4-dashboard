@@ -45,7 +45,7 @@ def register_callbacks(app):
         fig.add_trace(go.Scatter(
             x=acts["timestamp"], y=acts["mid_price"],
             mode="lines", name="Mid",
-            line={"color": "black", "width": 1.5},
+            line={"color": "black", "width": 2.5},
             connectgaps=False,
         ))
 
@@ -57,7 +57,7 @@ def register_callbacks(app):
                     fig.add_trace(go.Scatter(
                         x=acts["timestamp"], y=acts[col],
                         mode="lines", name=name,
-                        line={"color": color, "width": 1},
+                        line={"color": color, "width": 2},
                         connectgaps=False,
                     ))
 

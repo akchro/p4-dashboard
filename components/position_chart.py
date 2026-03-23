@@ -29,7 +29,7 @@ def register_callbacks(app):
             fig.add_trace(go.Scatter(
                 x=pos["timestamp"], y=pos["position"],
                 mode="lines", name="Position",
-                line={"color": "black", "width": 1.5},
+                line={"color": "black", "width": 2.5},
             ))
         fig.update_layout(
             title="Net Position",

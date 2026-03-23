@@ -10,6 +10,14 @@ def layout():
             marks={1: "1", 5: "5", 10: "10", 15: "15", 20: "20"},
             tooltip={"placement": "bottom"},
         ),
+        html.Br(),
+        html.Label("Volume Bucket Interval", style={"fontWeight": "bold"}),
+        dcc.Slider(
+            id="volume-bucket-slider",
+            min=1000, max=50000, step=1000, value=10000,
+            marks={1000: "1k", 10000: "10k", 25000: "25k", 50000: "50k"},
+            tooltip={"placement": "bottom"},
+        ),
     ])
 
 

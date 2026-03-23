@@ -29,7 +29,7 @@ def register_callbacks(app):
         fig.add_trace(go.Scatter(
             x=acts["timestamp"], y=acts["profit_and_loss"],
             mode="lines", name="PnL",
-            line={"color": "black", "width": 1.5},
+            line={"color": "black", "width": 2.5},
         ))
         fig.update_layout(
             title="Profit & Loss",

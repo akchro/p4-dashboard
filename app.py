@@ -1,10 +1,10 @@
 from dash import Dash, html, dcc
 from components import (
     controls, trade_filters, performance_controls,
-    main_chart, pnl_chart, position_chart, log_viewer,
+    main_chart, pnl_chart, position_chart, volume_chart, log_viewer,
 )
 from components import (
-    historical_controls, historical_chart,
+    historical_controls, historical_chart, historical_volume,
     historical_filters, historical_performance,
 )
 
@@ -26,9 +26,9 @@ CELL_STYLE = {
 live_tab = html.Div(style={
     "display": "grid",
     "gridTemplateColumns": "3fr 1fr",
-    "gridTemplateRows": "60vh 18vh 18vh",
+    "gridTemplateRows": "50vh 16vh 16vh 14vh",
     "height": "calc(100vh - 60px)",
-    "gap": "4px",
+    "gap": "2px",
     "padding": "4px",
 }, children=[
     html.Div(main_chart.layout(), style={
@@ -40,8 +40,11 @@ live_tab = html.Div(style={
     html.Div(position_chart.layout(), style={
         **CELL_STYLE, "gridColumn": "1", "gridRow": "3",
     }),
+    html.Div(volume_chart.layout(), style={
+        **CELL_STYLE, "gridColumn": "1", "gridRow": "4",
+    }),
     html.Div(style={
-        **SIDEBAR_STYLE, "gridColumn": "2", "gridRow": "1 / 4",
+        **SIDEBAR_STYLE, "gridColumn": "2", "gridRow": "1 / 5",
     }, children=[
         log_viewer.layout(),
         html.Hr(),
@@ -56,16 +59,19 @@ live_tab = html.Div(style={
 historical_tab = html.Div(style={
     "display": "grid",
     "gridTemplateColumns": "3fr 1fr",
-    "gridTemplateRows": "1fr",
+    "gridTemplateRows": "70vh 26vh",
     "height": "calc(100vh - 60px)",
-    "gap": "4px",
+    "gap": "2px",
     "padding": "4px",
 }, children=[
     html.Div(historical_chart.layout(), style={
         **CELL_STYLE, "gridColumn": "1", "gridRow": "1",
     }),
+    html.Div(historical_volume.layout(), style={
+        **CELL_STYLE, "gridColumn": "1", "gridRow": "2",
+    }),
     html.Div(style={
-        **SIDEBAR_STYLE, "gridColumn": "2", "gridRow": "1",
+        **SIDEBAR_STYLE, "gridColumn": "2", "gridRow": "1 / 3",
     }, children=[
         historical_controls.layout(),
         html.Hr(),
@@ -86,11 +92,11 @@ app.layout = html.Div(style={
 ])
 
 # Register all callbacks
-for module in [controls, main_chart, pnl_chart, position_chart, log_viewer,
-               trade_filters, performance_controls]:
+for module in [controls, main_chart, pnl_chart, position_chart, volume_chart,
+               log_viewer, trade_filters, performance_controls]:
     module.register_callbacks(app)
 
-for module in [historical_controls, historical_chart,
+for module in [historical_controls, historical_chart, historical_volume,
                historical_filters, historical_performance]:
     module.register_callbacks(app)
 
