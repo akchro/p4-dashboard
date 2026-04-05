@@ -23,6 +23,14 @@ def layout():
             ),
         ]),
         html.Br(),
+        html.Label("Overlays", style={"fontWeight": "bold"}),
+        dcc.Checklist(
+            id="wallmid-toggle",
+            options=[{"label": "Wallmid", "value": "show"}],
+            value=[],
+            inputStyle={"marginRight": "4px"},
+        ),
+        html.Br(),
         html.Label("Trades", style={"fontWeight": "bold"}),
         dcc.Checklist(
             id="trade-toggle",

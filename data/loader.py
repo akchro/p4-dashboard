@@ -1,3 +1,4 @@
+import re
 import json
 from io import StringIO
 import pandas as pd
@@ -38,6 +39,9 @@ def load_log(filepath: str) -> dict:
     else:
         logs = pd.DataFrame(columns=["timestamp", "lambdaLog", "sandboxLog"])
 
+    # Parse wallmid from lambdaLog (optional — not all logs have it)
+    activities = _merge_wallmid(activities, logs)
+
     return {
         "activities": activities,
         "trades": trades,
@@ -52,3 +56,40 @@ def _classify_side(row):
     if row.get("buyer") == "SUBMISSION":
         return "buy"
     return "market"
+
+
+_WALLMID_RE = re.compile(r"wallmid:\s*([\d.eE+-]+)")
+
+
+def _merge_wallmid(activities, logs):
+    """Extract wallmid values from lambdaLog and add as a column to activities.
+
+    Each lambdaLog entry may contain one 'wallmid: <value>' line per product,
+    ordered alphabetically by product name. If no wallmid data is found the
+    activities DataFrame is returned unchanged.
+    """
+    if logs.empty or "lambdaLog" not in logs.columns:
+        return activities
+
+    products_sorted = sorted(activities["product"].unique())
+    if not products_sorted:
+        return activities
+
+    rows = []
+    for _, log_row in logs.iterrows():
+        ts = log_row.get("timestamp")
+        text = log_row.get("lambdaLog")
+        if pd.isna(ts) or not isinstance(text, str):
+            continue
+        values = _WALLMID_RE.findall(text)
+        if len(values) != len(products_sorted):
+            continue
+        for product, val in zip(products_sorted, values):
+            rows.append({"timestamp": int(ts), "product": product, "wallmid": float(val)})
+
+    if not rows:
+        return activities
+
+    wm = pd.DataFrame(rows)
+    activities = activities.merge(wm, on=["timestamp", "product"], how="left")
+    return activities
