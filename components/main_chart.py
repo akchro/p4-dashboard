@@ -16,9 +16,9 @@ LEVEL_MAP = {
 }
 
 TRADE_STYLES = {
-    "buy":    {"color": "green",  "symbol": "triangle-up",   "name": "Buy"},
-    "sell":   {"color": "red",    "symbol": "triangle-down", "name": "Sell"},
-    "market": {"color": "gray",   "symbol": "circle",        "name": "Market"},
+    "buy":    {"color": "orange", "symbol": "triangle-up",   "name": "Buy"},
+    "sell":   {"color": "cyan",   "symbol": "triangle-down", "name": "Sell"},
+    "market": {"color": "yellow", "symbol": "circle",        "name": "Market"},
 }
 
 
@@ -103,6 +103,7 @@ def register_callbacks(app):
                             "color": style["color"],
                             "symbol": style["symbol"],
                             "size": 8,
+                            "line": {"width": 1, "color": "black"},
                         },
                         hovertemplate=(
                             "t=%{x}<br>price=%{y}<br>"
