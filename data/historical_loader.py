@@ -52,6 +52,11 @@ def load_round(round_name: str) -> dict:
         price_dfs.append(df)
     activities = pd.concat(price_dfs, ignore_index=True) if price_dfs else pd.DataFrame()
 
+    # Guard against mid_price=0 when the order book is empty — replace with NaN
+    # so charts show a gap instead of spiking to zero.
+    if not activities.empty and "mid_price" in activities.columns:
+        activities.loc[activities["mid_price"] == 0, "mid_price"] = pd.NA
+
     # Load and concat trades, extracting day from filename
     trade_dfs = []
     for f in trade_files:
