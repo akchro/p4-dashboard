@@ -48,6 +48,10 @@ live_tab = html.Div(style={
     }, children=[
         log_viewer.layout(),
         html.Hr(),
+        html.Div(id="pnl-overall-stats", style={
+            "fontSize": "12px", "padding": "6px 0",
+        }),
+        html.Hr(),
         controls.layout(),
         html.Hr(),
         trade_filters.layout(),

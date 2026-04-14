@@ -20,6 +20,11 @@ def load_log(filepath: str) -> dict:
         if col in activities.columns:
             activities[col] = pd.to_numeric(activities[col], errors="coerce")
 
+    # Guard against mid_price=0 when the order book is empty — replace with NaN
+    # so charts show a gap instead of spiking to zero.
+    if "mid_price" in activities.columns:
+        activities.loc[activities["mid_price"] == 0, "mid_price"] = pd.NA
+
     # Parse trades
     trade_list = raw.get("tradeHistory", [])
     if trade_list:
