@@ -57,6 +57,16 @@ def load_round(round_name: str) -> dict:
     if not activities.empty and "mid_price" in activities.columns:
         activities.loc[activities["mid_price"] == 0, "mid_price"] = pd.NA
 
+    # Compute wallmid: average of bid wall (lowest bid) and ask wall (highest ask).
+    # These "walls" are the deepest visible levels where market makers quote.
+    if not activities.empty:
+        bid_cols = [c for c in ["bid_price_1", "bid_price_2", "bid_price_3"] if c in activities.columns]
+        ask_cols = [c for c in ["ask_price_1", "ask_price_2", "ask_price_3"] if c in activities.columns]
+        if bid_cols and ask_cols:
+            bid_wall = activities[bid_cols].min(axis=1)
+            ask_wall = activities[ask_cols].max(axis=1)
+            activities["wallmid"] = (bid_wall + ask_wall) / 2
+
     # Load and concat trades, extracting day from filename
     trade_dfs = []
     for f in trade_files:

@@ -30,9 +30,10 @@ def register_callbacks(app):
          Input("hist-downsample-slider", "value"),
          Input("hist-level-toggles", "value"),
          Input("hist-trade-toggle", "value"),
-         Input("hist-qty-filter", "value")],
+         Input("hist-qty-filter", "value"),
+         Input("hist-wallmid-toggle", "value")],
     )
-    def update_hist_chart(product, day, downsample, levels, trade_toggle, qty_range):
+    def update_hist_chart(product, day, downsample, levels, trade_toggle, qty_range, wallmid_toggle):
         if not product or not historical_store.is_loaded():
             raise PreventUpdate
 
@@ -48,6 +49,17 @@ def register_callbacks(app):
             line={"color": "black", "width": 2.5},
             connectgaps=False,
         ))
+
+        # Wallmid overlay
+        if wallmid_toggle and "show" in wallmid_toggle and "wallmid" in acts.columns:
+            wm = acts.dropna(subset=["wallmid"])
+            if not wm.empty:
+                fig.add_trace(go.Scatter(
+                    x=wm["timestamp"], y=wm["wallmid"],
+                    mode="lines", name="Wallmid",
+                    line={"color": "#FF00FF", "width": 2},
+                    connectgaps=False,
+                ))
 
         # Order book levels
         if levels:

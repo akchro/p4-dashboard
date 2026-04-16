@@ -48,9 +48,10 @@ def register_callbacks(app):
          Input("level-toggles", "value"),
          Input("trade-toggle", "value"),
          Input("qty-filter", "value"),
-         Input("wallmid-toggle", "value")],
+         Input("wallmid-toggle", "value"),
+         Input("dashboard-wallmid-toggle", "value")],
     )
-    def update_main_chart(product, day, downsample, levels, trade_toggle, qty_range, wallmid_toggle):
+    def update_main_chart(product, day, downsample, levels, trade_toggle, qty_range, wallmid_toggle, dashboard_wallmid_toggle):
         if not product or not store.is_loaded():
             raise PreventUpdate
 
@@ -75,6 +76,17 @@ def register_callbacks(app):
                     x=wm["timestamp"], y=wm["wallmid"],
                     mode="lines", name="Wallmid",
                     line={"color": "#FF00FF", "width": 2},
+                    connectgaps=False,
+                ))
+
+        # Dashboard wallmid overlay (computed from order book levels)
+        if dashboard_wallmid_toggle and "show" in dashboard_wallmid_toggle and "dashboard_wallmid" in acts.columns:
+            dwm = acts.dropna(subset=["dashboard_wallmid"])
+            if not dwm.empty:
+                fig.add_trace(go.Scatter(
+                    x=dwm["timestamp"], y=dwm["dashboard_wallmid"],
+                    mode="lines", name="Dashboard Wallmid",
+                    line={"color": "#00CED1", "width": 2},
                     connectgaps=False,
                 ))
 

@@ -30,6 +30,12 @@ def layout():
             value=[],
             inputStyle={"marginRight": "4px"},
         ),
+        dcc.Checklist(
+            id="dashboard-wallmid-toggle",
+            options=[{"label": "Dashboard Wallmid", "value": "show"}],
+            value=[],
+            inputStyle={"marginRight": "4px"},
+        ),
         html.Br(),
         html.Label("Trades", style={"fontWeight": "bold"}),
         dcc.Checklist(

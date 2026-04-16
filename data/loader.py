@@ -44,6 +44,14 @@ def load_log(filepath: str) -> dict:
     else:
         logs = pd.DataFrame(columns=["timestamp", "lambdaLog", "sandboxLog"])
 
+    # Compute dashboard_wallmid from order book levels: avg of bid wall and ask wall
+    bid_cols = [c for c in ["bid_price_1", "bid_price_2", "bid_price_3"] if c in activities.columns]
+    ask_cols = [c for c in ["ask_price_1", "ask_price_2", "ask_price_3"] if c in activities.columns]
+    if bid_cols and ask_cols:
+        bid_wall = activities[bid_cols].min(axis=1)
+        ask_wall = activities[ask_cols].max(axis=1)
+        activities["dashboard_wallmid"] = (bid_wall + ask_wall) / 2
+
     # Parse wallmid from lambdaLog (optional — not all logs have it)
     activities = _merge_wallmid(activities, logs)
 
