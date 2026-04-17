@@ -30,6 +30,15 @@ def load_log(filepath: str) -> dict:
     if trade_list:
         trades = pd.DataFrame(trade_list)
         trades["side"] = trades.apply(_classify_side, axis=1)
+        # Assign day to trades based on activity timestamp ranges per day
+        if "day" not in trades.columns and not activities.empty:
+            day_bounds = activities.groupby("day")["timestamp"].agg(["min", "max"])
+            def _assign_day(ts):
+                for day, (lo, hi) in day_bounds.iterrows():
+                    if lo <= ts <= hi:
+                        return day
+                return day_bounds.index[0]
+            trades["day"] = trades["timestamp"].apply(_assign_day)
     else:
         trades = pd.DataFrame(columns=[
             "timestamp", "buyer", "seller", "symbol", "currency",
