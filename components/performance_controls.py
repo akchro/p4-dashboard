@@ -18,6 +18,14 @@ def layout():
             marks={1000: "1k", 10000: "10k", 25000: "25k", 50000: "50k"},
             tooltip={"placement": "bottom"},
         ),
+        html.Br(),
+        html.Label("Order Bucket Interval", style={"fontWeight": "bold"}),
+        dcc.Slider(
+            id="order-bucket-slider",
+            min=1000, max=50000, step=1000, value=10000,
+            marks={1000: "1k", 10000: "10k", 25000: "25k", 50000: "50k"},
+            tooltip={"placement": "bottom"},
+        ),
     ])
 
 

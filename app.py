@@ -1,7 +1,7 @@
 from dash import Dash, html, dcc
 from components import (
     controls, trade_filters, performance_controls,
-    main_chart, pnl_chart, position_chart, volume_chart, log_viewer,
+    main_chart, pnl_chart, position_chart, volume_chart, order_chart, log_viewer,
 )
 from components import (
     historical_controls, historical_chart, historical_volume,
@@ -26,7 +26,7 @@ CELL_STYLE = {
 live_tab = html.Div(style={
     "display": "grid",
     "gridTemplateColumns": "3fr 1fr",
-    "gridTemplateRows": "60vh 40vh 25vh 25vh",
+    "gridTemplateRows": "60vh 40vh 30vh 25vh 25vh",
     "gap": "2px",
     "padding": "4px",
 }, children=[
@@ -36,14 +36,17 @@ live_tab = html.Div(style={
     html.Div(volume_chart.layout(), style={
         **CELL_STYLE, "gridColumn": "1", "gridRow": "2",
     }),
-    html.Div(pnl_chart.layout(), style={
+    html.Div(order_chart.layout(), style={
         **CELL_STYLE, "gridColumn": "1", "gridRow": "3",
     }),
-    html.Div(position_chart.layout(), style={
+    html.Div(pnl_chart.layout(), style={
         **CELL_STYLE, "gridColumn": "1", "gridRow": "4",
     }),
+    html.Div(position_chart.layout(), style={
+        **CELL_STYLE, "gridColumn": "1", "gridRow": "5",
+    }),
     html.Div(style={
-        **SIDEBAR_STYLE, "gridColumn": "2", "gridRow": "1 / 5",
+        **SIDEBAR_STYLE, "gridColumn": "2", "gridRow": "1 / 6",
         "position": "sticky", "top": "40px", "height": "calc(100vh - 60px)",
     }, children=[
         log_viewer.layout(),
@@ -96,7 +99,7 @@ app.layout = html.Div(style={
 
 # Register all callbacks
 for module in [controls, main_chart, pnl_chart, position_chart, volume_chart,
-               log_viewer, trade_filters, performance_controls]:
+               order_chart, log_viewer, trade_filters, performance_controls]:
     module.register_callbacks(app)
 
 for module in [historical_controls, historical_chart, historical_volume,

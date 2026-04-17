@@ -11,7 +11,7 @@ def layout():
         dcc.Graph(id="pnl-chart", style={"height": "calc(100% - 28px)"}),
         html.Div(
             id="pnl-range-stats",
-            children="Zoom into a range to see variance & max drawdown",
+            children="Zoom into a range to see std dev, CV & max drawdown",
             style={
                 "fontSize": "11px", "padding": "2px 10px",
                 "color": "#666", "height": "24px", "lineHeight": "24px",
@@ -66,7 +66,7 @@ def register_callbacks(app):
         x1 = relayout.get("xaxis.range[1]")
 
         if relayout.get("xaxis.autorange") or x0 is None or x1 is None:
-            return "Zoom into a range to see variance & max drawdown"
+            return "Zoom into a range to see std dev, CV & max drawdown"
 
         acts = store.get_activities(product, day)
         ts = pd.to_datetime(acts["timestamp"])
@@ -76,7 +76,10 @@ def register_callbacks(app):
         if len(ys) < 2:
             return "Zoom range has fewer than 2 points"
 
-        variance = float(np.var(ys))
+        changes = np.diff(ys)
+        chg_std = float(np.std(changes))
+        chg_mean = float(np.mean(changes))
+        chg_cv = (chg_std / abs(chg_mean) * 100) if chg_mean != 0 else 0
 
         peak = ys[0]
         max_dd = 0.0
@@ -92,7 +95,7 @@ def register_callbacks(app):
 
         return (
             f"{len(ys)} pts | "
-            f"Variance: {variance:,.2f} | "
+            f"\u0394PnL Std Dev: {chg_std:,.2f} | \u0394PnL CV: {chg_cv:.2f}% | "
             f"Max Drawdown: {max_dd:,.2f} ({pct:.1f}%)"
         )
 
@@ -111,7 +114,10 @@ def register_callbacks(app):
         if len(ys) < 2:
             return "Not enough PnL data"
 
-        variance = float(np.var(ys))
+        changes = np.diff(ys)
+        chg_std = float(np.std(changes))
+        chg_mean = float(np.mean(changes))
+        chg_cv = (chg_std / abs(chg_mean) * 100) if chg_mean != 0 else 0
 
         peak = ys[0]
         max_dd = 0.0
@@ -127,6 +133,6 @@ def register_callbacks(app):
 
         return html.Div([
             html.Div("PnL Stats", style={"fontWeight": "bold", "marginBottom": "4px"}),
-            html.Div(f"Variance: {variance:,.2f}"),
+            html.Div(f"\u0394PnL Std Dev: {chg_std:,.2f} | \u0394PnL CV: {chg_cv:.2f}%"),
             html.Div(f"Max Drawdown: {max_dd:,.2f} ({pct:.1f}%)"),
         ])

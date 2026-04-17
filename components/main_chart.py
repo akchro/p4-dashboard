@@ -29,7 +29,7 @@ def layout():
         dcc.Graph(id="main-chart", style={"height": "calc(100% - 28px)"}),
         html.Div(
             id="main-range-stats",
-            children="Zoom into a range to see mid-price variance & max drawdown",
+            children="Zoom into a range to see std dev, CV & max drawdown",
             style={
                 "fontSize": "11px", "padding": "2px 10px",
                 "color": "#666", "height": "24px", "lineHeight": "24px",
@@ -167,7 +167,7 @@ def register_callbacks(app):
         x1 = relayout.get("xaxis.range[1]")
 
         if relayout.get("xaxis.autorange") or x0 is None or x1 is None:
-            return "Zoom into a range to see mid-price variance & max drawdown"
+            return "Zoom into a range to see std dev, CV & max drawdown"
 
         acts = store.get_activities(product, day)
         ts = pd.to_datetime(acts["timestamp"])
@@ -177,7 +177,9 @@ def register_callbacks(app):
         if len(ys) < 2:
             return "Zoom range has fewer than 2 points"
 
-        variance = float(np.var(ys))
+        std_dev = float(np.std(ys))
+        mean = float(np.mean(ys))
+        cv = (std_dev / abs(mean) * 100) if mean != 0 else 0
 
         peak = ys[0]
         max_dd = 0.0
@@ -193,6 +195,6 @@ def register_callbacks(app):
 
         return (
             f"{len(ys)} pts | "
-            f"Variance: {variance:,.4f} | "
+            f"Std Dev: {std_dev:,.4f} | CV: {cv:.2f}% | "
             f"Max Drawdown: {max_dd:,.4f} ({pct:.1f}%)"
         )
