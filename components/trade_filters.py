@@ -53,7 +53,15 @@ def layout():
             inputStyle={"marginRight": "4px"},
         ),
         html.Br(),
-        html.Label("Qty Filter", style={"fontWeight": "bold"}),
+        html.Div([
+            html.Label("Qty Filter", style={"fontWeight": "bold"}),
+            html.Button(
+                "Reset",
+                id="qty-filter-reset",
+                n_clicks=0,
+                style={"marginLeft": "8px", "fontSize": "11px", "padding": "2px 6px"},
+            ),
+        ], style={"display": "flex", "alignItems": "center"}),
         dcc.RangeSlider(
             id="qty-filter",
             min=0, max=100, step=1,
@@ -65,4 +73,10 @@ def layout():
 
 
 def register_callbacks(app):
-    pass  # filters are consumed by main_chart callback
+    @app.callback(
+        Output("qty-filter", "value"),
+        Input("qty-filter-reset", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def reset_qty_filter(_):
+        return [0, 100]

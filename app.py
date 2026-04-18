@@ -7,6 +7,7 @@ from components import (
     historical_controls, historical_chart, historical_volume,
     historical_filters, historical_performance,
 )
+from components import manual_controls, manual_round2
 
 app = Dash(__name__)
 app.config.suppress_callback_exceptions = True
@@ -88,12 +89,33 @@ historical_tab = html.Div(style={
     ]),
 ])
 
+manual_tab = html.Div(style={
+    "display": "grid",
+    "gridTemplateColumns": "3fr 1fr",
+    "gap": "2px",
+    "padding": "4px",
+    "minHeight": "calc(100vh - 60px)",
+}, children=[
+    html.Div(manual_round2.charts_layout(), style={
+        **CELL_STYLE, "gridColumn": "1",
+    }),
+    html.Div(style={
+        **SIDEBAR_STYLE, "gridColumn": "2",
+        "position": "sticky", "top": "40px", "height": "calc(100vh - 60px)",
+    }, children=[
+        manual_controls.layout(),
+        html.Hr(),
+        manual_round2.controls_layout(),
+    ]),
+])
+
 app.layout = html.Div(style={
     "fontFamily": "Arial, sans-serif",
 }, children=[
     dcc.Tabs(id="mode-tabs", value="live", children=[
         dcc.Tab(label="Live", value="live", children=[live_tab]),
         dcc.Tab(label="Historical", value="historical", children=[historical_tab]),
+        dcc.Tab(label="Manual", value="manual", children=[manual_tab]),
     ], style={"height": "40px"}),
 ])
 
@@ -104,6 +126,9 @@ for module in [controls, main_chart, pnl_chart, position_chart, volume_chart,
 
 for module in [historical_controls, historical_chart, historical_volume,
                historical_filters, historical_performance]:
+    module.register_callbacks(app)
+
+for module in [manual_controls, manual_round2]:
     module.register_callbacks(app)
 
 if __name__ == "__main__":
