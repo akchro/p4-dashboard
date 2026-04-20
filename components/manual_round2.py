@@ -32,7 +32,22 @@ def _optimal_rs(budget_left):
     return r, s, _research(r) * _scale(s)
 
 
-def _sample_distribution(dist_type, a, b, n, seed):
+def _sample_clusters(clusters, n, rng):
+    if not clusters:
+        return rng.uniform(0, 100, size=n)
+    centers = np.array([float(c[0]) for c in clusters])
+    stds = np.array([max(float(c[1]), 1e-3) for c in clusters])
+    weights = np.array([max(float(c[2]), 0.0) for c in clusters])
+    total = weights.sum()
+    if total <= 0:
+        return rng.uniform(0, 100, size=n)
+    weights = weights / total
+    idx = rng.choice(len(centers), size=n, p=weights)
+    samples = rng.normal(centers[idx], stds[idx])
+    return np.clip(samples, 0, 100)
+
+
+def _sample_distribution(dist_type, a, b, n, seed, clusters=None):
     rng = np.random.default_rng(int(seed))
     if dist_type == "Uniform":
         lo, hi = sorted([float(a), float(b)])
@@ -46,6 +61,8 @@ def _sample_distribution(dist_type, a, b, n, seed):
     if dist_type == "Beta":
         alpha, beta = max(float(a), 0.1), max(float(b), 0.1)
         return rng.beta(alpha, beta, size=n) * 100
+    if dist_type == "Clusters":
+        return _sample_clusters(clusters or [], n, rng)
     return rng.uniform(0, 100, size=n)
 
 
@@ -57,8 +74,8 @@ def _speed_mult(sp_self, others):
     return 0.9 - 0.8 * (rank - 1) / (n_total - 1)
 
 
-def _pnl_curve(dist_type, a, b, n_players, seed, budget_cap):
-    others = _sample_distribution(dist_type, a, b, int(n_players), seed)
+def _pnl_curve(dist_type, a, b, n_players, seed, budget_cap, clusters=None):
+    others = _sample_distribution(dist_type, a, b, int(n_players), seed, clusters)
     sp_grid = np.arange(0, int(budget_cap) + 1, 1, dtype=float)
     pnl = np.zeros_like(sp_grid)
     r_grid = np.zeros_like(sp_grid)
@@ -84,7 +101,6 @@ def _param_label(dist_type):
 
 
 def _dist_description(dist_type):
-    from dash import html
     if dist_type == "Uniform":
         return html.Span("Every speed value between Min and Max is equally likely.")
     if dist_type == "Normal":
@@ -104,7 +120,70 @@ def _dist_description(dist_type):
             ]),
             "Useful for modeling fields where players cluster or split.",
         ])
+    if dist_type == "Clusters":
+        return html.Div([
+            html.B("Clusters (mixture) "),
+            "models multi-modal fields — e.g. profit-max + focal-point + speed-first players.",
+            html.Ul(style={"margin": "4px 0", "paddingLeft": "16px"}, children=[
+                html.Li("Each cluster is a truncated normal clipped to [0, 100]"),
+                html.Li("Weight = relative share (normalized across clusters)"),
+                html.Li("Set a cluster's weight to 0 to disable it"),
+            ]),
+        ])
     return ""
+
+
+CLUSTER_DEFAULTS = [
+    {"center": 5,  "std": 5,  "weight": 15, "color": "#2ca02c", "label": "Low (profit-max)"},
+    {"center": 50, "std": 8,  "weight": 35, "color": "#1f77b4", "label": "Mid (focal / level-1)"},
+    {"center": 70, "std": 8,  "weight": 40, "color": "#d62728", "label": "High (level-2 / speed)"},
+]
+
+
+def _cluster_block(idx, cfg):
+    return html.Div(
+        style={
+            "borderLeft": f"3px solid {cfg['color']}",
+            "paddingLeft": "8px",
+            "marginBottom": "10px",
+        },
+        children=[
+            html.Div(
+                f"Cluster {idx} — {cfg['label']}",
+                style={"fontWeight": "bold", "fontSize": "12px", "color": cfg["color"]},
+            ),
+            html.Label("Center", style={"fontSize": "11px"}),
+            dcc.Slider(
+                id=f"r2-c{idx}-center", min=0, max=100, step=1, value=cfg["center"],
+                marks={0: "0", 50: "50", 100: "100"},
+                tooltip={"placement": "bottom"},
+            ),
+            html.Label("Spread", style={"fontSize": "11px"}),
+            dcc.Slider(
+                id=f"r2-c{idx}-std", min=1, max=30, step=1, value=cfg["std"],
+                marks={1: "1", 15: "15", 30: "30"},
+                tooltip={"placement": "bottom"},
+            ),
+            html.Label("Weight", style={"fontSize": "11px"}),
+            dcc.Slider(
+                id=f"r2-c{idx}-weight", min=0, max=100, step=1, value=cfg["weight"],
+                marks={0: "0", 50: "50", 100: "100"},
+                tooltip={"placement": "bottom"},
+            ),
+        ],
+    )
+
+
+CLUSTER_INPUT_IDS = [
+    "r2-c1-center", "r2-c1-std", "r2-c1-weight",
+    "r2-c2-center", "r2-c2-std", "r2-c2-weight",
+    "r2-c3-center", "r2-c3-std", "r2-c3-weight",
+]
+CLUSTER_INPUTS = [Input(cid, "value") for cid in CLUSTER_INPUT_IDS]
+
+
+def _pack_clusters(c1c, c1s, c1w, c2c, c2s, c2w, c3c, c3s, c3w):
+    return [(c1c, c1s, c1w), (c2c, c2s, c2w), (c3c, c3s, c3w)]
 
 
 def controls_layout():
@@ -116,6 +195,7 @@ def controls_layout():
                 {"label": "Uniform", "value": "Uniform"},
                 {"label": "Normal", "value": "Normal"},
                 {"label": "Beta", "value": "Beta"},
+                {"label": "Clusters (mixture)", "value": "Clusters"},
             ],
             value="Uniform",
             clearable=False,
@@ -124,19 +204,26 @@ def controls_layout():
             "fontSize": "11px", "color": "#555", "padding": "6px 4px",
             "lineHeight": "1.4",
         }),
-        html.Br(),
-        html.Label(id="r2-label-a", style={"fontWeight": "bold"}, children="Min"),
-        dcc.Slider(
-            id="r2-dist-a", min=0, max=100, step=1, value=0,
-            marks={0: "0", 25: "25", 50: "50", 75: "75", 100: "100"},
-            tooltip={"placement": "bottom"},
-        ),
-        html.Br(),
-        html.Label(id="r2-label-b", style={"fontWeight": "bold"}, children="Max"),
-        dcc.Slider(
-            id="r2-dist-b", min=0, max=100, step=1, value=100,
-            marks={0: "0", 25: "25", 50: "50", 75: "75", 100: "100"},
-            tooltip={"placement": "bottom"},
+        html.Div(id="r2-single-params", children=[
+            html.Br(),
+            html.Label(id="r2-label-a", style={"fontWeight": "bold"}, children="Min"),
+            dcc.Slider(
+                id="r2-dist-a", min=0, max=100, step=1, value=0,
+                marks={0: "0", 25: "25", 50: "50", 75: "75", 100: "100"},
+                tooltip={"placement": "bottom"},
+            ),
+            html.Br(),
+            html.Label(id="r2-label-b", style={"fontWeight": "bold"}, children="Max"),
+            dcc.Slider(
+                id="r2-dist-b", min=0, max=100, step=1, value=100,
+                marks={0: "0", 25: "25", 50: "50", 75: "75", 100: "100"},
+                tooltip={"placement": "bottom"},
+            ),
+        ]),
+        html.Div(
+            id="r2-cluster-params",
+            style={"display": "none"},
+            children=[_cluster_block(i + 1, cfg) for i, cfg in enumerate(CLUSTER_DEFAULTS)],
         ),
         html.Br(),
         html.Label("Number of Other Players", style={"fontWeight": "bold"}),
@@ -186,12 +273,20 @@ def register_callbacks(app):
     @app.callback(
         [Output("r2-label-a", "children"),
          Output("r2-label-b", "children"),
-         Output("r2-dist-description", "children")],
+         Output("r2-dist-description", "children"),
+         Output("r2-single-params", "style"),
+         Output("r2-cluster-params", "style")],
         [Input("r2-dist-type", "value")],
     )
     def update_param_labels(dist_type):
         a, b = _param_label(dist_type)
-        return a, b, _dist_description(dist_type)
+        if dist_type == "Clusters":
+            single_style = {"display": "none"}
+            cluster_style = {"display": "block"}
+        else:
+            single_style = {"display": "block"}
+            cluster_style = {"display": "none"}
+        return a, b, _dist_description(dist_type), single_style, cluster_style
 
     @app.callback(
         [Output("r2-pnl-chart", "figure"),
@@ -201,14 +296,16 @@ def register_callbacks(app):
          Input("r2-dist-b", "value"),
          Input("r2-num-players", "value"),
          Input("r2-seed", "value"),
-         Input("r2-budget-cap", "value")],
+         Input("r2-budget-cap", "value"),
+         *CLUSTER_INPUTS],
     )
-    def update_pnl_and_allocation(dist_type, a, b, n_players, seed, budget_cap):
+    def update_pnl_and_allocation(dist_type, a, b, n_players, seed, budget_cap,
+                                  c1c, c1s, c1w, c2c, c2s, c2w, c3c, c3s, c3w):
+        clusters = _pack_clusters(c1c, c1s, c1w, c2c, c2s, c2w, c3c, c3s, c3w)
         sp_grid, pnl, r_grid, s_grid, speed_mults, _ = _pnl_curve(
-            dist_type, a, b, n_players, seed, budget_cap
+            dist_type, a, b, n_players, seed, budget_cap, clusters=clusters
         )
 
-        # PnL chart with argmax annotation
         idx_best = int(np.argmax(pnl))
         sp_best = sp_grid[idx_best]
         r_best, s_best = r_grid[idx_best], s_grid[idx_best]
@@ -244,7 +341,6 @@ def register_callbacks(app):
             template="plotly_white",
         )
 
-        # Allocation chart
         alloc_fig = go.Figure()
         alloc_fig.add_trace(go.Scatter(
             x=sp_grid, y=r_grid, mode="lines", name="Research %",
@@ -276,16 +372,33 @@ def register_callbacks(app):
          Input("r2-dist-a", "value"),
          Input("r2-dist-b", "value"),
          Input("r2-num-players", "value"),
-         Input("r2-seed", "value")],
+         Input("r2-seed", "value"),
+         *CLUSTER_INPUTS],
     )
-    def update_dist_chart(dist_type, a, b, n_players, seed):
-        samples = _sample_distribution(dist_type, a, b, int(n_players), seed)
+    def update_dist_chart(dist_type, a, b, n_players, seed,
+                          c1c, c1s, c1w, c2c, c2s, c2w, c3c, c3s, c3w):
+        clusters = _pack_clusters(c1c, c1s, c1w, c2c, c2s, c2w, c3c, c3s, c3w)
+        samples = _sample_distribution(dist_type, a, b, int(n_players), seed, clusters)
         fig = go.Figure()
         fig.add_trace(go.Histogram(
             x=samples, nbinsx=min(50, max(10, int(n_players) // 4)),
             marker={"color": "#9467bd"},
             name="Other players' speed %",
         ))
+        if dist_type == "Clusters":
+            total_w = sum(max(float(c[2]), 0.0) for c in clusters) or 1.0
+            for i, (cfg, c) in enumerate(zip(CLUSTER_DEFAULTS, clusters)):
+                center, _std, weight = c
+                if float(weight) <= 0:
+                    continue
+                share = 100 * float(weight) / total_w
+                fig.add_vline(
+                    x=float(center),
+                    line={"color": cfg["color"], "dash": "dash", "width": 1.5},
+                    annotation_text=f"C{i+1} ({share:.0f}%)",
+                    annotation_position="top",
+                    annotation_font={"color": cfg["color"], "size": 10},
+                )
         fig.update_layout(
             title=f"Other Players' Speed Distribution ({dist_type}, n={int(n_players)})",
             xaxis_title="Speed Investment (%)",
