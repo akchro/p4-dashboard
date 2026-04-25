@@ -1,13 +1,16 @@
-# CLAUDE.md — Claude's reference for this repo
+# CLAUDE.md — instructions for Claude on this repo
 
-This file exists so I can orient myself quickly after a context reset. Keep it
-tight; point to sources of truth rather than duplicating them.
+This file is how I orient you after a context reset. Keep it tight; point to
+sources of truth rather than duplicating them.
+
+I can use the commands too, but they're primarily here for you to analyze data
+quickly.
 
 ## Project
 
-IMC Prosperity Round 3 trading dashboard (Dash/Plotly). Visualizes order book,
-trades, PnL, positions, and — new in Round 3 — options analytics (overlay,
-volatility smile, IV time series). The user uses this to inspect both live log
+This is my IMC Prosperity Round 3 trading dashboard (Dash/Plotly). It visualizes
+order book, trades, PnL, positions, and — new in Round 3 — options analytics
+(overlay, volatility smile, IV time series). I use it to inspect both live log
 files (`logs/*.log`) and historical CSVs (`historical/ROUND_*/`).
 
 The round trades three asset classes:
@@ -15,9 +18,9 @@ The round trades three asset classes:
 - `VELVETFRUIT_EXTRACT` (delta-1, position limit 200) — the options underlying
 - 10 vouchers `VEV_{K}` where `K ∈ {4000, 4500, 5000, 5100, 5200, 5300, 5400, 5500, 6000, 6500}` — European calls, position limit 300 each
 
-See `docs/ROUND_3.md` for details on how the round works
+Read `docs/ROUND_3.md` for details on how the round works.
 
-See `docs/round3_options_primer.md` for theory and strategy menu.
+Read `docs/round3_options_primer.md` for theory and strategy menu.
 
 
 ## Data conventions
@@ -65,12 +68,12 @@ logs/*.log                      # live submission logs (JSON)
 
 ## Tools
 
-One CLI, `tools/probe.py`, with subcommands. Run from the repo root.
-**Do not name any tool `inspect.py`** — it shadows Python's stdlib `inspect`
+I've given you one CLI, `tools/probe.py`, with subcommands. Run it from the repo
+root. **Don't name any tool `inspect.py`** — it shadows Python's stdlib `inspect`
 module when numpy is imported from `tools/`.
 
-All commands default to `--round ROUND_3`. Most require `--day {0,1,2}`.
-Most support `--json` for structured output.
+All commands default to `--round ROUND_3`. Most require `--day {0,1,2}`. Most
+support `--json` for structured output.
 
 ### `summary` — per-product mid stats
 ```bash
@@ -121,8 +124,8 @@ whether IV is stable or moves.
 python3 tools/probe.py arb --day 2                          # default tol=0.5
 python3 tools/probe.py arb --day 2 --tol 0.0 --strikes 5200 5300
 ```
-Flags voucher `ask < max(S_bid − K, 0)` or `bid > S_ask`. These are free-money
-opportunities when they show up.
+Flags voucher `ask < max(S_bid − K, 0)` or `bid > S_ask`. Treat these as
+free-money opportunities when they show up.
 
 ### `greeks` — Δ/Γ/Θ/ν at a timestamp
 ```bash
@@ -133,18 +136,18 @@ in the IV column as `"0.015 (fallback)"`).
 
 ## Common workflows
 
-**User says "something weird around t=X for VEV_K on day D":**
+**When I say "something weird around t=X for VEV_K on day D":**
 1. `probe.py book --day D --product VEV_K --ts X` — see the book
 2. `probe.py price --day D --product VEV_K --range (X-5000):(X+5000)` — nearby prices
 3. `probe.py price --day D --product VELVETFRUIT_EXTRACT --range … --stats` — compare underlying
 4. `probe.py smile --day D --ts X` — full cross-section snapshot
 
-**User asks about vol regime:**
+**When I ask about vol regime:**
 - `probe.py iv --day D` to see per-strike distribution
 - Flat distribution (low std) → market thinks vol is known
 - Wide distribution → IV mean-reversion candidate
 
-**User asks about arb:**
+**When I ask about arb:**
 - `probe.py arb --day D --tol 0.0` for the strictest check
 - Deep ITM strikes (4000, 4500) most likely to throw stale-book violations
 
@@ -157,11 +160,12 @@ in the IV column as `"0.015 (fallback)"`).
 - Greeks: closed-form with r=0.
 - All prices quoted on a tick grid of 0.5 for deep OTM (the 0.5 floor).
 
-## Gotchas I've hit
+## Gotchas to watch for
 
 - **Filename shadowing:** never name a script under `tools/` `inspect.py`,
   `logging.py`, `types.py`, etc. Python auto-prepends the script's directory
-  to `sys.path`, so stdlib imports get shadowed. Present name `probe.py`.
+  to `sys.path`, so stdlib imports get shadowed. The current name is `probe.py` —
+  keep it that way.
 - **Plotly array encoding:** Plotly JSON may encode numeric arrays as
   `{"dtype": "...", "bdata": "..."}`. `len(trace["y"])` returns 2 (dict keys)
   not the true length — always inspect figures by rendering, not by counting
@@ -171,5 +175,5 @@ in the IV column as `"0.015 (fallback)"`).
   (bid-ask bounce), not a real vol-risk premium. Bucket the underlying before
   computing realized vol if this matters.
 - **Dash IDs must be globally unique.** Sub-tabs within a top-level tab all
-  render into the DOM at once. When reusing an ID (like `hist-day-selector`)
-  across sub-tabs, it works — but duplicating the same ID in two sub-tabs breaks.
+  render into the DOM at once. Reusing an ID (like `hist-day-selector`)
+  across sub-tabs works — but duplicating the same ID in two sub-tabs breaks it.
