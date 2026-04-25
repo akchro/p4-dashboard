@@ -18,7 +18,7 @@ CELL = {"border": "1px solid #ddd", "borderRadius": "4px"}
 def _controls_row():
     return html.Div(style={
         "display": "grid",
-        "gridTemplateColumns": "1.5fr 0.7fr 0.7fr 1fr 1fr",
+        "gridTemplateColumns": "1.4fr 0.6fr 0.7fr 0.6fr 1fr 1fr",
         "gap": "10px",
         "padding": "8px",
         "borderBottom": "1px solid #ddd",
@@ -50,12 +50,22 @@ def _controls_row():
                 options=[
                     {"label": "mid + floor", "value": "overlay"},
                     {"label": "extrinsic", "value": "extrinsic"},
+                    {"label": "implied S", "value": "implied"},
+                    {"label": "rebased", "value": "rebased"},
                 ],
                 value="overlay",
                 inline=True,
                 style={"fontSize": "11px"},
                 inputStyle={"marginRight": "3px"},
                 labelStyle={"marginRight": "8px"},
+            ),
+        ]),
+        html.Div([
+            html.Label("σ baseline (/√d)", style={"fontWeight": "bold", "fontSize": "11px"}),
+            dcc.Input(
+                id="opt-sigma-baseline", type="number",
+                value=0.013, min=0.001, max=1.0, step=0.001,
+                style={"width": "100%"},
             ),
         ]),
         html.Div([
@@ -102,8 +112,11 @@ def layout():
     }, children=[
         _controls_row(),
         html.Div(style={"padding": "4px 10px 0", "fontSize": "11px", "color": "#666"},
-                 children="Overlay — voucher mid vs intrinsic floor per selected strike. "
-                          "Dotted = max(S−K, 0); solid = voucher mid. Gap = extrinsic."),
+                 children="Overlay modes — 'mid + floor': solid voucher mid vs dotted intrinsic max(S−K,0); "
+                          "'extrinsic': C − max(S−K,0); 'implied S': BS-inverted underlying per voucher at "
+                          "the chosen σ baseline, alongside observed S (gaps = mispricing); "
+                          "'rebased': voucher mids shifted to start at S(t₀) for visual co-movement comparison "
+                          "(absolute levels are NOT actual prices)."),
         html.Div(style={**CELL, "minHeight": "30vh"}, children=[
             dcc.Graph(id="opt-overlay-chart", style={"height": "100%"}),
         ]),
@@ -129,12 +142,18 @@ def register_callbacks(app):
         [Input("opt-strike-multi", "value"),
          Input("day-selector", "value"),
          Input("downsample-slider", "value"),
-         Input("opt-overlay-mode", "value")],
+         Input("opt-overlay-mode", "value"),
+         Input("opt-tte-start", "value"),
+         Input("opt-sigma-baseline", "value")],
     )
-    def _overlay(strikes, day, downsample, mode):
+    def _overlay(strikes, day, downsample, mode, tte_start, sigma_baseline):
         if not store.is_loaded():
             raise PreventUpdate
-        return options_core.build_overlay_figure(store, strikes, day, downsample, mode=mode)
+        return options_core.build_overlay_figure(
+            store, strikes, day, downsample, mode=mode,
+            tte_start=tte_start or opts.LIVE_TTE_AT_START,
+            sigma_baseline=sigma_baseline or 0.013,
+        )
 
     @app.callback(
         Output("opt-iv-ts-chart", "figure"),

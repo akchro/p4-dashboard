@@ -163,3 +163,46 @@ def log_moneyness(K, S, T):
     K = np.asarray(K, dtype=float)
     T = np.maximum(np.asarray(T, dtype=float), 1e-9)
     return np.log(K / S) / np.sqrt(T)
+
+
+def implied_underlying(C, K, T, sigma, r=0.0, n_iter=40, tol=1e-5):
+    """Invert BS_call(S, K, T, sigma) = C for S, given the other inputs.
+
+    Newton-Raphson using delta as the derivative. Returns NaN where C is at
+    or below the 0.5 price floor (no information) or the solver fails to
+    converge within bounds. Useful for visualizing the underlying value that
+    each voucher's price implies at a chosen baseline sigma.
+    """
+    C = np.asarray(C, dtype=float)
+    shape = C.shape
+    K_arr = np.broadcast_to(np.asarray(K, dtype=float), shape).astype(float)
+    T_arr = np.broadcast_to(np.asarray(T, dtype=float), shape).astype(float)
+    sig_arr = np.broadcast_to(np.asarray(sigma, dtype=float), shape).astype(float)
+
+    valid = (
+        np.isfinite(C) & np.isfinite(K_arr) & np.isfinite(T_arr) & np.isfinite(sig_arr) &
+        (C > 0.5 + 1e-6) & (T_arr > 1e-9) & (sig_arr > 0)
+    )
+
+    # Initial guess: deep-ITM exact value S = K + C; converges fast elsewhere.
+    S = np.where(valid, K_arr + C, K_arr)
+
+    diff = np.full(shape, np.nan)
+    for _ in range(n_iter):
+        with np.errstate(invalid="ignore", divide="ignore"):
+            sqrtT = np.sqrt(T_arr)
+            d1 = (np.log(S / K_arr) + 0.5 * sig_arr * sig_arr * T_arr) / (sig_arr * sqrtT)
+            price = bs_call(S, K_arr, T_arr, sig_arr, r)
+            delta = _norm_cdf(d1)
+            diff = price - C
+            update = np.where(delta > 1e-9, diff / delta, 0.0)
+            S = np.maximum(S - update, 1e-3)
+        finite_diff = diff[valid]
+        finite_diff = finite_diff[np.isfinite(finite_diff)]
+        if finite_diff.size == 0 or np.max(np.abs(finite_diff)) < tol:
+            break
+
+    final_price = bs_call(S, K_arr, T_arr, sig_arr, r)
+    resid = np.abs(final_price - C)
+    converged = valid & (resid < max(tol * 10, 0.05))
+    return np.where(converged, S, np.nan)

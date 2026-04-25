@@ -46,11 +46,18 @@ def _downsample(df, step):
 # Overlay: voucher mid vs intrinsic floor max(S-K, 0)
 # ---------------------------------------------------------------------------
 
-def build_overlay_figure(store_module, strikes, day, downsample, mode="overlay"):
-    """Overlay voucher mid with the intrinsic floor max(S-K, 0).
+def build_overlay_figure(store_module, strikes, day, downsample, mode="overlay",
+                         tte_start=None, sigma_baseline=0.013):
+    """Overlay voucher mid with reference lines per strike.
 
-    mode = "overlay"   → plot both lines per strike (absolute prices)
-    mode = "extrinsic" → plot C - max(S-K, 0) per strike (bounded to small y-range)
+    mode = "overlay"   → voucher mid + intrinsic floor max(S-K, 0); S on y2
+    mode = "extrinsic" → C - max(S-K, 0) per strike (bounded to small y-range)
+    mode = "implied"   → BS-inverted underlying per voucher at sigma_baseline,
+                          plotted alongside observed S on a single y-axis. In a
+                          fair market all lines collapse onto S; gaps = mispricing.
+    mode = "rebased"   → voucher mid shifted so each line starts at S(t₀).
+                          Lets you eyeball relative movement; absolute levels
+                          are NOT actual prices.
     """
     if not strikes or not store_module.is_loaded():
         return _empty("Select one or more voucher strikes")
@@ -80,8 +87,42 @@ def build_overlay_figure(store_module, strikes, day, downsample, mode="overlay")
         ).dropna()
         if merged.empty:
             continue
-        intrinsic = np.maximum(merged["S"] - K_int, 0.0)
 
+        if mode == "implied":
+            T = opts.time_to_expiry(merged["timestamp"].to_numpy(),
+                                    tte_start if tte_start else 8.0)
+            S_implied = opts.implied_underlying(
+                merged["C"].to_numpy(), K_int, T, sigma_baseline,
+            )
+            fig.add_trace(go.Scatter(
+                x=merged["timestamp"], y=S_implied,
+                mode="lines", name=f"VEV_{K_int} → S_impl",
+                line={"color": color, "width": 1.6},
+                connectgaps=False,
+                hovertemplate="t=%{x}<br>S_impl=%{y:.2f}<extra>VEV_%{meta}</extra>",
+                meta=K_int,
+            ))
+            continue
+
+        if mode == "rebased":
+            shift = float(merged["S"].iloc[0]) - float(merged["C"].iloc[0])
+            y_rebased = merged["C"] + shift
+            fig.add_trace(go.Scatter(
+                x=merged["timestamp"], y=y_rebased,
+                mode="lines", name=f"VEV_{K_int} (rebased)",
+                line={"color": color, "width": 2},
+                connectgaps=False,
+                customdata=np.stack([merged["C"].to_numpy(),
+                                     np.full(len(merged), shift)], axis=-1),
+                hovertemplate=("t=%{x}<br>rebased=%{y:.2f}<br>"
+                               "actual mid=%{customdata[0]:.2f}<br>"
+                               "shift=%{customdata[1]:+.2f}"
+                               "<extra>VEV_%{meta}</extra>"),
+                meta=K_int,
+            ))
+            continue
+
+        intrinsic = np.maximum(merged["S"] - K_int, 0.0)
         if mode == "extrinsic":
             fig.add_trace(go.Scatter(
                 x=merged["timestamp"], y=merged["C"] - intrinsic,
@@ -109,23 +150,36 @@ def build_overlay_figure(store_module, strikes, day, downsample, mode="overlay")
                 meta=K_int,
             ))
 
-    if mode == "overlay" and not ve.empty:
+    if mode in ("overlay", "implied", "rebased") and not ve.empty:
+        s_axis = "y2" if mode == "overlay" else "y"
         fig.add_trace(go.Scatter(
             x=ve["timestamp"], y=ve["mid_price"],
-            mode="lines", name=f"{opts.UNDERLYING} mid",
+            mode="lines", name=f"{opts.UNDERLYING} mid (observed)",
             line={"color": "#000000", "width": 2.2},
-            yaxis="y2",
+            yaxis=s_axis,
             connectgaps=False,
             hovertemplate="t=%{x}<br>S=%{y:.2f}<extra>VEV underlying</extra>",
         ))
 
-    title_suffix = "extrinsic value" if mode == "extrinsic" else "mid vs intrinsic floor"
+    title_map = {
+        "overlay": "mid vs intrinsic floor",
+        "extrinsic": "extrinsic value",
+        "implied": f"implied underlying (σ={sigma_baseline:.4f}/√day)",
+        "rebased": "rebased to S(t₀)",
+    }
+    yaxis_title_map = {
+        "overlay": "Voucher price",
+        "extrinsic": "Extrinsic (C − max(S−K, 0))",
+        "implied": "Underlying price (observed & BS-implied per voucher)",
+        "rebased": "Rebased price (NOT actual — shifted to align at t₀)",
+    }
+    top_margin = 70 if mode == "rebased" else 40
     layout_kwargs = {
-        "title": f"Voucher {title_suffix}",
+        "title": f"Voucher {title_map.get(mode, mode)}",
         "xaxis_title": "Timestamp",
-        "yaxis_title": "Voucher price" if mode == "overlay" else "Extrinsic (C − max(S−K, 0))",
+        "yaxis_title": yaxis_title_map.get(mode, "Price"),
         "hovermode": "x unified",
-        "margin": {"l": 50, "r": 60, "t": 40, "b": 30},
+        "margin": {"l": 50, "r": 60, "t": top_margin, "b": 30},
         "legend": {"orientation": "h", "y": -0.15},
         "template": "plotly_white",
     }
@@ -139,6 +193,17 @@ def build_overlay_figure(store_module, strikes, day, downsample, mode="overlay")
     fig.update_layout(**layout_kwargs)
     if mode == "extrinsic":
         fig.add_hline(y=0, line={"color": "#999", "width": 1, "dash": "dash"})
+    if mode == "rebased":
+        fig.add_annotation(
+            text=("<b>NORMALIZED VIEW</b> — voucher mids are shifted vertically so each "
+                  "starts at S(t₀). Y-axis values are NOT actual voucher prices; "
+                  "only the shape and relative movement are meaningful."),
+            xref="paper", yref="paper",
+            x=0.5, y=1.0, xanchor="center", yanchor="bottom",
+            showarrow=False,
+            font={"size": 11, "color": "#664d03"},
+            bgcolor="#fff3cd", bordercolor="#f0ad4e", borderwidth=1, borderpad=5,
+        )
     return fig
 
 
