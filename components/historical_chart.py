@@ -88,7 +88,12 @@ def register_callbacks(app):
                         y=trades["price"],
                         mode="markers",
                         name="Trade",
-                        marker={"color": "gray", "symbol": "circle", "size": 8},
+                        marker={
+                            "color": "yellow",
+                            "symbol": "circle",
+                            "size": 8,
+                            "line": {"width": 1, "color": "black"},
+                        },
                         hovertemplate=(
                             "t=%{x}<br>price=%{y}<br>"
                             "qty=%{customdata[0]}"

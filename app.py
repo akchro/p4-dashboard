@@ -8,6 +8,7 @@ from components import (
     historical_filters, historical_performance,
 )
 from components import manual_controls, manual_round2
+from components import options_live, options_historical
 
 app = Dash(__name__)
 app.config.suppress_callback_exceptions = True
@@ -24,30 +25,32 @@ CELL_STYLE = {
     "borderRadius": "4px",
 }
 
+live_trading_content = html.Div(style={
+    "display": "grid",
+    "gridTemplateRows": "60vh 40vh 30vh 25vh 25vh",
+    "gap": "2px",
+}, children=[
+    html.Div(main_chart.layout(), style=CELL_STYLE),
+    html.Div(volume_chart.layout(), style=CELL_STYLE),
+    html.Div(order_chart.layout(), style=CELL_STYLE),
+    html.Div(pnl_chart.layout(), style=CELL_STYLE),
+    html.Div(position_chart.layout(), style=CELL_STYLE),
+])
+
 live_tab = html.Div(style={
     "display": "grid",
     "gridTemplateColumns": "3fr 1fr",
-    "gridTemplateRows": "60vh 40vh 30vh 25vh 25vh",
     "gap": "2px",
     "padding": "4px",
 }, children=[
-    html.Div(main_chart.layout(), style={
-        **CELL_STYLE, "gridColumn": "1", "gridRow": "1",
-    }),
-    html.Div(volume_chart.layout(), style={
-        **CELL_STYLE, "gridColumn": "1", "gridRow": "2",
-    }),
-    html.Div(order_chart.layout(), style={
-        **CELL_STYLE, "gridColumn": "1", "gridRow": "3",
-    }),
-    html.Div(pnl_chart.layout(), style={
-        **CELL_STYLE, "gridColumn": "1", "gridRow": "4",
-    }),
-    html.Div(position_chart.layout(), style={
-        **CELL_STYLE, "gridColumn": "1", "gridRow": "5",
-    }),
+    html.Div(style={"gridColumn": "1"}, children=[
+        dcc.Tabs(id="live-subtabs", value="trading", children=[
+            dcc.Tab(label="Trading", value="trading", children=[live_trading_content]),
+            dcc.Tab(label="Options", value="options", children=[options_live.layout()]),
+        ], style={"height": "36px"}),
+    ]),
     html.Div(style={
-        **SIDEBAR_STYLE, "gridColumn": "2", "gridRow": "1 / 6",
+        **SIDEBAR_STYLE, "gridColumn": "2",
         "position": "sticky", "top": "40px", "height": "calc(100vh - 60px)",
     }, children=[
         log_viewer.layout(),
@@ -64,21 +67,29 @@ live_tab = html.Div(style={
     ]),
 ])
 
+historical_trading_content = html.Div(style={
+    "display": "grid",
+    "gridTemplateRows": "60vh 40vh",
+    "gap": "2px",
+}, children=[
+    html.Div(historical_chart.layout(), style=CELL_STYLE),
+    html.Div(historical_volume.layout(), style=CELL_STYLE),
+])
+
 historical_tab = html.Div(style={
     "display": "grid",
     "gridTemplateColumns": "3fr 1fr",
-    "gridTemplateRows": "60vh 40vh",
     "gap": "2px",
     "padding": "4px",
 }, children=[
-    html.Div(historical_chart.layout(), style={
-        **CELL_STYLE, "gridColumn": "1", "gridRow": "1",
-    }),
-    html.Div(historical_volume.layout(), style={
-        **CELL_STYLE, "gridColumn": "1", "gridRow": "2",
-    }),
+    html.Div(style={"gridColumn": "1"}, children=[
+        dcc.Tabs(id="hist-subtabs", value="trading", children=[
+            dcc.Tab(label="Trading", value="trading", children=[historical_trading_content]),
+            dcc.Tab(label="Options", value="options", children=[options_historical.layout()]),
+        ], style={"height": "36px"}),
+    ]),
     html.Div(style={
-        **SIDEBAR_STYLE, "gridColumn": "2", "gridRow": "1 / 3",
+        **SIDEBAR_STYLE, "gridColumn": "2",
         "position": "sticky", "top": "40px", "height": "calc(100vh - 60px)",
     }, children=[
         historical_controls.layout(),
@@ -126,6 +137,9 @@ for module in [controls, main_chart, pnl_chart, position_chart, volume_chart,
 
 for module in [historical_controls, historical_chart, historical_volume,
                historical_filters, historical_performance]:
+    module.register_callbacks(app)
+
+for module in [options_live, options_historical]:
     module.register_callbacks(app)
 
 for module in [manual_controls, manual_round2]:
