@@ -109,115 +109,128 @@ def build_overlay_figure(store_module, strikes, day, downsample, mode="overlay")
                 meta=K_int,
             ))
 
+    if mode == "overlay" and not ve.empty:
+        fig.add_trace(go.Scatter(
+            x=ve["timestamp"], y=ve["mid_price"],
+            mode="lines", name=f"{opts.UNDERLYING} mid",
+            line={"color": "#000000", "width": 2.2},
+            yaxis="y2",
+            connectgaps=False,
+            hovertemplate="t=%{x}<br>S=%{y:.2f}<extra>VEV underlying</extra>",
+        ))
+
     title_suffix = "extrinsic value" if mode == "extrinsic" else "mid vs intrinsic floor"
-    fig.update_layout(
-        title=f"Voucher {title_suffix}",
-        xaxis_title="Timestamp",
-        yaxis_title="Price" if mode == "overlay" else "Extrinsic (C − max(S−K, 0))",
-        hovermode="x unified",
-        margin={"l": 50, "r": 20, "t": 40, "b": 30},
-        legend={"orientation": "h", "y": -0.15},
-        template="plotly_white",
-    )
+    layout_kwargs = {
+        "title": f"Voucher {title_suffix}",
+        "xaxis_title": "Timestamp",
+        "yaxis_title": "Voucher price" if mode == "overlay" else "Extrinsic (C − max(S−K, 0))",
+        "hovermode": "x unified",
+        "margin": {"l": 50, "r": 60, "t": 40, "b": 30},
+        "legend": {"orientation": "h", "y": -0.15},
+        "template": "plotly_white",
+    }
+    if mode == "overlay":
+        layout_kwargs["yaxis2"] = {
+            "title": f"{opts.UNDERLYING} mid",
+            "overlaying": "y",
+            "side": "right",
+            "showgrid": False,
+        }
+    fig.update_layout(**layout_kwargs)
     if mode == "extrinsic":
         fig.add_hline(y=0, line={"color": "#999", "width": 1, "dash": "dash"})
     return fig
 
 
 # ---------------------------------------------------------------------------
-# Volatility smile at a single timestamp
+# Volatility smile — full-day IV scatter, color-coded by strike
 # ---------------------------------------------------------------------------
 
-def _nearest_row(df, timestamp, col="timestamp"):
-    if df.empty:
-        return None
-    i = (df[col] - timestamp).abs().idxmin()
-    return df.loc[i]
+def build_smile_figure(store_module, strikes, day, tte_start, downsample, x_axis, show_fit):
+    """Scatter cloud of (x, IV) across the whole day for each selected strike.
 
-
-def build_smile_figure(store_module, timestamp, day, tte_start, x_axis, show_fit):
-    if not store_module.is_loaded() or timestamp is None:
-        return _empty("Loading...")
+    x is either log-moneyness m = ln(K/S)/√T or raw strike K. Each strike gets
+    its own color (shared with overlay / IV-TS). Optional quadratic fit is one
+    parabola through the combined cloud.
+    """
+    if not strikes or not store_module.is_loaded():
+        return _empty("Select one or more voucher strikes")
 
     ve = store_module.get_activities(opts.UNDERLYING, day)
     if ve.empty:
         return _empty(f"No {opts.UNDERLYING} data for day {day}")
-    ve_row = _nearest_row(ve.dropna(subset=["mid_price"]), timestamp)
-    if ve_row is None:
-        return _empty("No underlying mid at that timestamp")
-    S = float(ve_row["mid_price"])
-    actual_ts = int(ve_row["timestamp"])
-    T = max(float(tte_start) - actual_ts / opts.TIMESTAMP_PER_DAY, 1e-6)
-
-    rows = []
-    for K in opts.STRIKES:
-        voucher = store_module.get_activities(f"VEV_{K}", day)
-        if voucher.empty:
-            continue
-        v_row = _nearest_row(voucher.dropna(subset=["mid_price"]), timestamp)
-        if v_row is None:
-            continue
-        C = float(v_row["mid_price"])
-        if not np.isfinite(C):
-            continue
-        rows.append({"strike": K, "C": C, "S": S, "T": T})
-
-    if not rows:
-        return _empty("No voucher prices at that timestamp")
-
-    df = pd.DataFrame(rows)
-    df["iv"] = opts.implied_vol(df["C"].values, df["S"].values, df["strike"].values.astype(float), df["T"].values)
-    df["moneyness"] = opts.log_moneyness(df["strike"].values.astype(float), df["S"].values, df["T"].values)
-    valid = df.dropna(subset=["iv"])
+    ve_ds = _downsample(ve, downsample)
 
     fig = go.Figure()
+    all_x = []
+    all_y = []
 
-    if valid.empty:
-        fig.add_annotation(
-            text=f"No solvable IVs at t={actual_ts:,} (all at floor or intrinsic)",
-            xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False,
-            font={"color": "#999"},
-        )
-    else:
-        xcol = "moneyness" if x_axis == "moneyness" else "strike"
-        x_label = "log-moneyness m = ln(K/S)/√T" if x_axis == "moneyness" else "Strike K"
+    for K in strikes:
+        try:
+            K_int = int(K)
+        except (TypeError, ValueError):
+            continue
+        voucher = store_module.get_activities(f"VEV_{K_int}", day)
+        if voucher.empty:
+            continue
+        voucher = _downsample(voucher, downsample)
+        merged = pd.merge(
+            voucher[["timestamp", "mid_price"]].rename(columns={"mid_price": "C"}),
+            ve_ds[["timestamp", "mid_price"]].rename(columns={"mid_price": "S"}),
+            on="timestamp", how="inner",
+        ).dropna()
+        if merged.empty:
+            continue
+        T = opts.time_to_expiry(merged["timestamp"].values, float(tte_start))
+        K_arr = np.full(len(merged), K_int, dtype=float)
+        iv = opts.implied_vol(merged["C"].values, merged["S"].values, K_arr, T)
+        m = opts.log_moneyness(K_arr, merged["S"].values, T)
+        valid = np.isfinite(iv)
+        if not valid.any():
+            continue
+
+        xs = m[valid] if x_axis == "moneyness" else K_arr[valid]
+        ys = iv[valid]
+        ts = merged["timestamp"].values[valid]
+        all_x.append(xs)
+        all_y.append(ys)
 
         fig.add_trace(go.Scatter(
-            x=valid[xcol], y=valid["iv"],
-            mode="lines+markers+text", name="IV",
-            text=[str(int(k)) for k in valid["strike"]],
-            textposition="top center",
-            textfont={"size": 10},
-            marker={"size": 10, "color": "#377eb8"},
-            line={"color": "#377eb8", "width": 2},
+            x=xs, y=ys, mode="markers",
+            name=f"VEV_{K_int}",
+            marker={"color": strike_color(K_int), "size": 4, "opacity": 0.55},
+            customdata=ts,
             hovertemplate=(
-                "K=%{customdata[0]}<br>"
-                "C=%{customdata[1]:.2f}<br>"
-                "IV=%{y:.5f}/√d<br>"
-                "m=%{customdata[2]:.3f}<extra></extra>"
+                f"K={K_int}<br>"
+                "t=%{customdata:,}<br>"
+                "x=%{x:.4f}<br>"
+                "IV=%{y:.5f}<extra></extra>"
             ),
-            customdata=list(zip(valid["strike"], valid["C"], valid["moneyness"])),
         ))
 
-        if show_fit and len(valid) >= 3:
-            xs = valid[xcol].values
-            ys = valid["iv"].values
+    if not all_x:
+        return _empty("No solvable IVs across selected strikes")
+
+    if show_fit:
+        xs_all = np.concatenate(all_x)
+        ys_all = np.concatenate(all_y)
+        if len(xs_all) >= 3:
             try:
-                coef = np.polyfit(xs, ys, 2)
-                xfit = np.linspace(xs.min(), xs.max(), 60)
+                coef = np.polyfit(xs_all, ys_all, 2)
+                xfit = np.linspace(xs_all.min(), xs_all.max(), 80)
                 yfit = np.polyval(coef, xfit)
                 fig.add_trace(go.Scatter(
                     x=xfit, y=yfit, mode="lines",
-                    name=f"quadratic fit  a+bm+cm²  = {coef[2]:.4g}+{coef[1]:.4g}m+{coef[0]:.4g}m²",
-                    line={"color": "#e41a1c", "width": 2, "dash": "dash"},
+                    name=f"fit: {coef[0]:.4g}x² + {coef[1]:.4g}x + {coef[2]:.4g}",
+                    line={"color": "#000000", "width": 2.5},
                 ))
             except (np.linalg.LinAlgError, ValueError):
                 pass
 
-        fig.update_xaxes(title=x_label)
-
+    x_label = "log-moneyness m = ln(K/S)/√T" if x_axis == "moneyness" else "Strike K"
     fig.update_layout(
-        title=f"Volatility Smile · t={actual_ts:,} · S={S:.2f} · T={T:.3f}d",
+        title="Volatility Smile · full day (color = strike)",
+        xaxis_title=x_label,
         yaxis_title="Implied Volatility (per √day)",
         margin={"l": 50, "r": 20, "t": 40, "b": 40},
         legend={"orientation": "h", "y": -0.25},

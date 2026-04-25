@@ -30,7 +30,7 @@ def _controls_row():
             dcc.Dropdown(
                 id="opt-strike-multi",
                 options=[{"label": f"VEV_{k}", "value": k} for k in opts.STRIKES],
-                value=[5200, 5300],
+                value=list(opts.STRIKES),
                 multi=True,
                 clearable=False,
             ),
@@ -93,23 +93,10 @@ def _controls_row():
     ])
 
 
-def _smile_ts_row():
-    return html.Div([
-        html.Label("Smile timestamp", style={"fontSize": "11px", "fontWeight": "bold",
-                                              "marginRight": "10px"}),
-        dcc.Slider(
-            id="opt-smile-ts", min=0, max=opts.TIMESTAMP_PER_DAY - 100, step=100,
-            value=opts.TIMESTAMP_PER_DAY // 2,
-            marks={i * opts.TIMESTAMP_PER_DAY // 10: f"{i}" for i in range(11)},
-            tooltip={"placement": "bottom", "always_visible": False},
-        ),
-    ], style={"padding": "0 14px 4px"})
-
-
 def layout():
     return html.Div(style={
         "display": "grid",
-        "gridTemplateRows": "auto auto 1fr auto 1fr",
+        "gridTemplateRows": "auto auto 1fr 1fr",
         "height": "calc(100vh - 110px)",
         "gap": "2px",
     }, children=[
@@ -120,7 +107,6 @@ def layout():
         html.Div(style={**CELL, "minHeight": "30vh"}, children=[
             dcc.Graph(id="opt-overlay-chart", style={"height": "100%"}),
         ]),
-        _smile_ts_row(),
         html.Div(style={
             "display": "grid",
             "gridTemplateColumns": "1fr 1fr",
@@ -169,17 +155,18 @@ def register_callbacks(app):
 
     @app.callback(
         Output("opt-smile-chart", "figure"),
-        [Input("opt-smile-ts", "value"),
+        [Input("opt-strike-multi", "value"),
          Input("day-selector", "value"),
          Input("opt-tte-start", "value"),
+         Input("downsample-slider", "value"),
          Input("opt-smile-x", "value"),
          Input("opt-smile-fit", "value")],
     )
-    def _smile(ts, day, tte_start, x_axis, fit_toggle):
+    def _smile(strikes, day, tte_start, downsample, x_axis, fit_toggle):
         if not store.is_loaded():
             raise PreventUpdate
         show_fit = bool(fit_toggle) and "show" in fit_toggle
         return options_core.build_smile_figure(
-            store, ts, day, tte_start or opts.LIVE_TTE_AT_START,
-            x_axis, show_fit,
+            store, strikes, day, tte_start or opts.LIVE_TTE_AT_START,
+            downsample, x_axis, show_fit,
         )
