@@ -17,10 +17,11 @@ def register_callbacks(app):
          Input("hist-day-selector", "value"),
          Input("hist-trade-toggle", "value"),
          Input("hist-qty-filter", "value"),
+         Input("hist-qty-filter-exact", "value"),
          Input("hist-volume-bucket-slider", "value"),
          Input("hist-volume-our-trades-toggle", "value")],
     )
-    def update_volume_chart(product, day, trade_toggle, qty_range, bucket_size, our_trades_toggle):
+    def update_volume_chart(product, day, trade_toggle, qty_range, qty_exact, bucket_size, our_trades_toggle):
         if not product or not historical_store.is_loaded():
             raise PreventUpdate
 
@@ -36,7 +37,9 @@ def register_callbacks(app):
                         (filtered["buyer"] != "SUBMISSION") &
                         (filtered["seller"] != "SUBMISSION")
                     ]
-            if qty_range:
+            if qty_exact is not None:
+                filtered = filtered[filtered["quantity"] == qty_exact]
+            elif qty_range:
                 filtered = filtered[
                     (filtered["quantity"] >= qty_range[0]) &
                     (filtered["quantity"] <= qty_range[1])

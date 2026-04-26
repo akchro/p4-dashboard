@@ -39,6 +39,18 @@ def layout():
             inputStyle={"marginRight": "4px"},
         ),
         html.Br(),
+        html.Label("R3 Trade-Time Overlay", style={"fontWeight": "bold"}),
+        html.Div(
+            "Dotted vertical lines at trade times of selected products",
+            style={"fontSize": "11px", "color": "#666", "marginBottom": "4px"},
+        ),
+        dcc.Dropdown(
+            id="hist-r3-overlay-products",
+            multi=True,
+            placeholder="Select products to overlay…",
+            style={"fontSize": "12px"},
+        ),
+        html.Br(),
         html.Label("Volume Filter", style={"fontWeight": "bold"}),
         dcc.Checklist(
             id="hist-volume-our-trades-toggle",
@@ -55,12 +67,21 @@ def layout():
                 n_clicks=0,
                 style={"marginLeft": "8px", "fontSize": "11px", "padding": "2px 6px"},
             ),
+            html.Label("Exact:", style={"marginLeft": "12px", "fontSize": "12px"}),
+            dcc.Input(
+                id="hist-qty-filter-exact",
+                type="number",
+                min=0, step=1,
+                placeholder="—",
+                value=None,
+                style={"width": "60px", "marginLeft": "4px", "fontSize": "12px"},
+            ),
         ], style={"display": "flex", "alignItems": "center"}),
         dcc.RangeSlider(
             id="hist-qty-filter",
-            min=0, max=100, step=1,
-            value=[0, 100],
-            marks={0: "0", 25: "25", 50: "50", 75: "75", 100: "100"},
+            min=0, max=50, step=1,
+            value=[0, 50],
+            marks={0: "0", 10: "10", 20: "20", 30: "30", 40: "40", 50: "50"},
             tooltip={"placement": "bottom"},
         ),
     ])
@@ -69,8 +90,16 @@ def layout():
 def register_callbacks(app):
     @app.callback(
         Output("hist-qty-filter", "value"),
+        Output("hist-qty-filter-exact", "value"),
         Input("hist-qty-filter-reset", "n_clicks"),
         prevent_initial_call=True,
     )
     def reset_hist_qty_filter(_):
-        return [0, 100]
+        return [0, 50], None
+
+    @app.callback(
+        Output("hist-r3-overlay-products", "options"),
+        Input("hist-product-selector", "options"),
+    )
+    def populate_hist_overlay_products(product_options):
+        return product_options or []

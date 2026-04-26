@@ -23,6 +23,24 @@ TRADE_STYLES = {
     "market": {"color": "yellow", "symbol": "circle",        "name": "Market"},
 }
 
+# Distinct colors for R3 trade-time overlays (avoids colors used elsewhere
+# on the chart: black mid, red/blue book levels, orange/cyan/yellow trades,
+# magenta/turquoise wallmids).
+OVERLAY_COLORS = [
+    "#2ca02c",  # green
+    "#9467bd",  # purple
+    "#8c564b",  # brown
+    "#e377c2",  # pink
+    "#7f7f7f",  # gray
+    "#bcbd22",  # olive
+    "#17becf",  # teal
+    "#ff7f0e",  # dark orange
+    "#1f77b4",  # steel blue
+    "#d62728",  # brick red
+    "#aec7e8",  # light steel
+    "#98df8a",  # light green
+]
+
 
 def layout():
     return html.Div([
@@ -48,10 +66,12 @@ def register_callbacks(app):
          Input("level-toggles", "value"),
          Input("trade-toggle", "value"),
          Input("qty-filter", "value"),
+         Input("qty-filter-exact", "value"),
          Input("wallmid-toggle", "value"),
-         Input("dashboard-wallmid-toggle", "value")],
+         Input("dashboard-wallmid-toggle", "value"),
+         Input("r3-overlay-products", "value")],
     )
-    def update_main_chart(product, day, downsample, levels, trade_toggle, qty_range, wallmid_toggle, dashboard_wallmid_toggle):
+    def update_main_chart(product, day, downsample, levels, trade_toggle, qty_range, qty_exact, wallmid_toggle, dashboard_wallmid_toggle, overlay_products):
         if not product or not store.is_loaded():
             raise PreventUpdate
 
@@ -106,7 +126,9 @@ def register_callbacks(app):
         if trade_toggle and "show" in trade_toggle:
             trades = store.get_trades(product, day)
             if not trades.empty:
-                if qty_range:
+                if qty_exact is not None:
+                    trades = trades[trades["quantity"] == qty_exact]
+                elif qty_range:
                     trades = trades[
                         (trades["quantity"] >= qty_range[0]) &
                         (trades["quantity"] <= qty_range[1])
@@ -141,6 +163,35 @@ def register_callbacks(app):
                             seller,
                         )),
                     ))
+
+        # R3 trade-time overlays (dotted vertical lines per selected product)
+        if overlay_products:
+            for i, op in enumerate(overlay_products):
+                if op == product:
+                    continue  # would just clutter own trades; user already sees them
+                ot = store.get_trades(op, day)
+                if ot.empty:
+                    continue
+                color = OVERLAY_COLORS[i % len(OVERLAY_COLORS)]
+                xs, ys = [], []
+                for t in ot["timestamp"]:
+                    xs.extend([t, t, None])
+                    ys.extend([0, 1, None])
+                fig.add_trace(go.Scatter(
+                    x=xs, y=ys,
+                    mode="lines",
+                    name=f"{op} ({len(ot)})",
+                    line={"color": color, "width": 1, "dash": "dot"},
+                    yaxis="y2",
+                    hoverinfo="skip",
+                    showlegend=True,
+                ))
+            fig.update_layout(
+                yaxis2={
+                    "overlaying": "y", "range": [0, 1],
+                    "showgrid": False, "showticklabels": False, "fixedrange": True,
+                },
+            )
 
         fig.update_layout(
             title=f"{product} Order Book",

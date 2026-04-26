@@ -17,10 +17,11 @@ def register_callbacks(app):
          Input("day-selector", "value"),
          Input("trade-toggle", "value"),
          Input("qty-filter", "value"),
+         Input("qty-filter-exact", "value"),
          Input("volume-bucket-slider", "value"),
          Input("volume-our-trades-toggle", "value")],
     )
-    def update_volume_chart(product, day, trade_toggle, qty_range, bucket_size, our_trades_toggle):
+    def update_volume_chart(product, day, trade_toggle, qty_range, qty_exact, bucket_size, our_trades_toggle):
         if not product or not store.is_loaded():
             raise PreventUpdate
 
@@ -33,7 +34,9 @@ def register_callbacks(app):
             if not (our_trades_toggle and "include" in our_trades_toggle):
                 if "side" in filtered.columns:
                     filtered = filtered[filtered["side"] == "market"]
-            if qty_range:
+            if qty_exact is not None:
+                filtered = filtered[filtered["quantity"] == qty_exact]
+            elif qty_range:
                 filtered = filtered[
                     (filtered["quantity"] >= qty_range[0]) &
                     (filtered["quantity"] <= qty_range[1])

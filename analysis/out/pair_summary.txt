@@ -1,0 +1,38 @@
+Phase 1 + 2 summary (machine-light, see stdout for full report)
+
+Engle-Granger fits:
+scope     n        alpha      beta  resid_adf_stat  resid_adf_p   coint_t  coint_p  resid_std  cointegrated
+ day0 10000  5132.230616  0.926088       -4.576179     0.000143 -4.576450 0.000914  21.933462          True
+ day1 10000  7510.880030  0.472750       -2.689832     0.075814 -2.689963 0.203209  36.973034         False
+ day2 10000 12161.672339 -0.413341       -3.130195     0.024398 -3.130363 0.082366  30.832942          True
+  all 30000  8953.242130  0.197628       -5.215247     0.000008 -5.215334 0.000065  31.785467          True
+
+ADF per series:
+scope             product  adf_stat  p_value  stationary
+ day0       HYDROGEL_PACK -3.566312 0.006439        True
+ day1       HYDROGEL_PACK -2.555069 0.102644       False
+ day2       HYDROGEL_PACK -3.033520 0.031880        True
+  all       HYDROGEL_PACK -5.158391 0.000011        True
+ day0 VELVETFRUIT_EXTRACT -3.526073 0.007342        True
+ day1 VELVETFRUIT_EXTRACT -3.063241 0.029396        True
+ day2 VELVETFRUIT_EXTRACT -2.291355 0.174771       False
+  all VELVETFRUIT_EXTRACT -4.832471 0.000047        True
+
+Contemporaneous corr by horizon:
+ horizon     n     corr
+       1 29997 0.005993
+      10  2997 0.016889
+      50   597 0.054223
+     200   147 0.172582
+
+Lead-lag:
+ lag_k     n      corr
+   -20 29977  0.002786
+   -10 29987  0.002182
+    -5 29992  0.008311
+    -1 29996  0.000799
+     0 29997  0.005993
+     1 29996  0.002666
+     5 29992 -0.000920
+    10 29987 -0.004981
+    20 29977  0.002025

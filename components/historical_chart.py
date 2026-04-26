@@ -15,6 +15,11 @@ LEVEL_MAP = {
     "ask_3": ("ask_price_3", "Ask 3", ASK_COLORS[2]),
 }
 
+OVERLAY_COLORS = [
+    "#2ca02c", "#9467bd", "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22",
+    "#17becf", "#ff7f0e", "#1f77b4", "#d62728", "#aec7e8", "#98df8a",
+]
+
 
 def layout():
     return html.Div([
@@ -31,9 +36,11 @@ def register_callbacks(app):
          Input("hist-level-toggles", "value"),
          Input("hist-trade-toggle", "value"),
          Input("hist-qty-filter", "value"),
-         Input("hist-wallmid-toggle", "value")],
+         Input("hist-qty-filter-exact", "value"),
+         Input("hist-wallmid-toggle", "value"),
+         Input("hist-r3-overlay-products", "value")],
     )
-    def update_hist_chart(product, day, downsample, levels, trade_toggle, qty_range, wallmid_toggle):
+    def update_hist_chart(product, day, downsample, levels, trade_toggle, qty_range, qty_exact, wallmid_toggle, overlay_products):
         if not product or not historical_store.is_loaded():
             raise PreventUpdate
 
@@ -77,7 +84,9 @@ def register_callbacks(app):
         if trade_toggle and "show" in trade_toggle:
             trades = historical_store.get_trades(product, day)
             if not trades.empty:
-                if qty_range:
+                if qty_exact is not None:
+                    trades = trades[trades["quantity"] == qty_exact]
+                elif qty_range:
                     trades = trades[
                         (trades["quantity"] >= qty_range[0]) &
                         (trades["quantity"] <= qty_range[1])
@@ -101,6 +110,35 @@ def register_callbacks(app):
                         ),
                         customdata=list(zip(trades["quantity"],)),
                     ))
+
+        # R3 trade-time overlays (dotted vertical lines per selected product)
+        if overlay_products:
+            for i, op in enumerate(overlay_products):
+                if op == product:
+                    continue
+                ot = historical_store.get_trades(op, day)
+                if ot.empty:
+                    continue
+                color = OVERLAY_COLORS[i % len(OVERLAY_COLORS)]
+                xs, ys = [], []
+                for t in ot["timestamp"]:
+                    xs.extend([t, t, None])
+                    ys.extend([0, 1, None])
+                fig.add_trace(go.Scatter(
+                    x=xs, y=ys,
+                    mode="lines",
+                    name=f"{op} ({len(ot)})",
+                    line={"color": color, "width": 1, "dash": "dot"},
+                    yaxis="y2",
+                    hoverinfo="skip",
+                    showlegend=True,
+                ))
+            fig.update_layout(
+                yaxis2={
+                    "overlaying": "y", "range": [0, 1],
+                    "showgrid": False, "showticklabels": False, "fixedrange": True,
+                },
+            )
 
         fig.update_layout(
             title=f"{product} Order Book (Historical)",
