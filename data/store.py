@@ -1,5 +1,6 @@
 import os
 import glob as _glob
+import pandas as pd
 from data.loader import load_log
 
 _data = None
@@ -23,6 +24,16 @@ def get_activities(product: str, day=None):
     if day is not None:
         df = df[df["day"] == day]
     return df
+
+
+def get_pnl_pivot(products, day=None):
+    df = _data["activities"]
+    if day is not None:
+        df = df[df["day"] == day]
+    df = df[df["product"].isin(products)]
+    if df.empty:
+        return pd.DataFrame()
+    return df.pivot_table(index="timestamp", columns="product", values="profit_and_loss")
 
 
 def get_trades(product: str, day=None):
@@ -51,6 +62,21 @@ def get_products():
 
 def get_days():
     return sorted(_data["activities"]["day"].unique().tolist())
+
+
+def get_traders():
+    """Return sorted list of unique counterparty names found in trades."""
+    df = _data["trades"]
+    if df.empty:
+        return []
+    names = set()
+    for col in ("buyer", "seller"):
+        if col in df.columns:
+            for v in df[col].dropna().unique():
+                s = str(v).strip()
+                if s:
+                    names.add(s)
+    return sorted(names)
 
 
 def get_submission_id():

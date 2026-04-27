@@ -19,9 +19,10 @@ def register_callbacks(app):
          Input("qty-filter", "value"),
          Input("qty-filter-exact", "value"),
          Input("volume-bucket-slider", "value"),
-         Input("volume-our-trades-toggle", "value")],
+         Input("volume-our-trades-toggle", "value"),
+         Input("trader-toggles", "value")],
     )
-    def update_volume_chart(product, day, trade_toggle, qty_range, qty_exact, bucket_size, our_trades_toggle):
+    def update_volume_chart(product, day, trade_toggle, qty_range, qty_exact, bucket_size, our_trades_toggle, selected_traders):
         if not product or not store.is_loaded():
             raise PreventUpdate
 
@@ -41,6 +42,18 @@ def register_callbacks(app):
                     (filtered["quantity"] >= qty_range[0]) &
                     (filtered["quantity"] <= qty_range[1])
                 ]
+            if selected_traders is not None and {"buyer", "seller"}.issubset(filtered.columns):
+                has_named = (
+                    filtered["buyer"].fillna("").astype(str).str.len().gt(0) |
+                    filtered["seller"].fillna("").astype(str).str.len().gt(0)
+                ).any()
+                if has_named:
+                    sel = set(selected_traders)
+                    mask = (
+                        filtered["buyer"].fillna("").astype(str).isin(sel) |
+                        filtered["seller"].fillna("").astype(str).isin(sel)
+                    )
+                    filtered = filtered[mask]
             if not filtered.empty:
                 filtered = filtered.copy()
                 filtered["bucket"] = (filtered["timestamp"] // bucket_size) * bucket_size

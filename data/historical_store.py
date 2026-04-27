@@ -34,6 +34,24 @@ def get_trades(product: str, day=None):
     return df
 
 
+def get_all_activities(day=None):
+    df = _data["activities"]
+    if df.empty:
+        return df
+    if day is not None:
+        df = df[df["day"] == day]
+    return df
+
+
+def get_all_trades(day=None):
+    df = _data["trades"]
+    if df.empty:
+        return df
+    if day is not None and "day" in df.columns:
+        df = df[df["day"] == day]
+    return df
+
+
 def get_products():
     df = _data["activities"]
     if df.empty:
@@ -46,3 +64,18 @@ def get_days():
     if df.empty:
         return []
     return sorted(df["day"].unique().tolist())
+
+
+def get_traders():
+    """Return sorted list of unique counterparty names found in trades."""
+    df = _data["trades"]
+    if df.empty:
+        return []
+    names = set()
+    for col in ("buyer", "seller"):
+        if col in df.columns:
+            for v in df[col].dropna().unique():
+                s = str(v).strip()
+                if s:
+                    names.add(s)
+    return sorted(names)

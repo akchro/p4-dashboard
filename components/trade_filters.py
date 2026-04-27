@@ -1,4 +1,6 @@
-from dash import html, dcc, Input, Output
+from dash import html, dcc, Input, Output, State
+from dash.exceptions import PreventUpdate
+from data import store
 
 
 def layout():
@@ -43,6 +45,30 @@ def layout():
             options=[{"label": "Show Trades", "value": "show"}],
             value=["show"],
             inputStyle={"marginRight": "4px"},
+        ),
+        html.Br(),
+        html.Div([
+            html.Label("Traders", style={"fontWeight": "bold"}),
+            html.Button(
+                "All", id="traders-all", n_clicks=0,
+                style={"marginLeft": "8px", "fontSize": "11px", "padding": "2px 6px"},
+            ),
+            html.Button(
+                "None", id="traders-none", n_clicks=0,
+                style={"marginLeft": "4px", "fontSize": "11px", "padding": "2px 6px"},
+            ),
+        ], style={"display": "flex", "alignItems": "center"}),
+        html.Div(
+            "Filter by buyer/seller identity",
+            style={"fontSize": "11px", "color": "#666", "marginBottom": "4px"},
+        ),
+        dcc.Checklist(
+            id="trader-toggles",
+            options=[],
+            value=[],
+            style={"fontSize": "12px"},
+            inputStyle={"marginRight": "4px"},
+            labelStyle={"display": "block"},
         ),
         html.Br(),
         html.Label("R3 Trade-Time Overlay", style={"fontWeight": "bold"}),
@@ -109,3 +135,32 @@ def register_callbacks(app):
     )
     def populate_overlay_products(product_options):
         return product_options or []
+
+    @app.callback(
+        [Output("trader-toggles", "options"),
+         Output("trader-toggles", "value")],
+        Input("product-selector", "options"),
+    )
+    def populate_traders(_product_options):
+        # Re-run after a log loads (product list update triggers this).
+        if not store.is_loaded():
+            raise PreventUpdate
+        traders = store.get_traders()
+        opts = [{"label": t, "value": t} for t in traders]
+        return opts, list(traders)
+
+    @app.callback(
+        Output("trader-toggles", "value", allow_duplicate=True),
+        [Input("traders-all", "n_clicks"),
+         Input("traders-none", "n_clicks")],
+        State("trader-toggles", "options"),
+        prevent_initial_call=True,
+    )
+    def toggle_all_traders(all_clicks, none_clicks, options):
+        from dash import callback_context
+        triggered = callback_context.triggered[0]["prop_id"] if callback_context.triggered else ""
+        if "traders-all" in triggered:
+            return [o["value"] for o in (options or [])]
+        if "traders-none" in triggered:
+            return []
+        raise PreventUpdate

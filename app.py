@@ -7,8 +7,8 @@ from components import (
     historical_controls, historical_chart, historical_volume,
     historical_filters, historical_performance,
 )
-from components import manual_controls, manual_round2
-from components import options_live, options_historical
+from components import manual_controls, manual_round2, manual_round3
+from components import options_live, options_historical, r3_bid_velocity, historical_player_pnl
 
 app = Dash(__name__)
 app.config.suppress_callback_exceptions = True
@@ -86,6 +86,8 @@ historical_tab = html.Div(style={
         dcc.Tabs(id="hist-subtabs", value="trading", children=[
             dcc.Tab(label="Trading", value="trading", children=[historical_trading_content]),
             dcc.Tab(label="Options", value="options", children=[options_historical.layout()]),
+            dcc.Tab(label="Player PnL", value="player_pnl", children=[historical_player_pnl.layout()]),
+            dcc.Tab(label="R3 Bid Velocity", value="r3bv", children=[r3_bid_velocity.layout()]),
         ], style={"height": "36px"}),
     ]),
     html.Div(style={
@@ -107,9 +109,10 @@ manual_tab = html.Div(style={
     "padding": "4px",
     "minHeight": "calc(100vh - 60px)",
 }, children=[
-    html.Div(manual_round2.charts_layout(), style={
-        **CELL_STYLE, "gridColumn": "1",
-    }),
+    html.Div(style={"gridColumn": "1"}, children=[
+        manual_round2.charts_layout(),
+        manual_round3.charts_layout(),
+    ]),
     html.Div(style={
         **SIDEBAR_STYLE, "gridColumn": "2",
         "position": "sticky", "top": "40px", "height": "calc(100vh - 60px)",
@@ -117,6 +120,7 @@ manual_tab = html.Div(style={
         manual_controls.layout(),
         html.Hr(),
         manual_round2.controls_layout(),
+        manual_round3.controls_layout(),
     ]),
 ])
 
@@ -139,10 +143,10 @@ for module in [historical_controls, historical_chart, historical_volume,
                historical_filters, historical_performance]:
     module.register_callbacks(app)
 
-for module in [options_live, options_historical]:
+for module in [options_live, options_historical, r3_bid_velocity, historical_player_pnl]:
     module.register_callbacks(app)
 
-for module in [manual_controls, manual_round2]:
+for module in [manual_controls, manual_round2, manual_round3]:
     module.register_callbacks(app)
 
 if __name__ == "__main__":

@@ -20,8 +20,27 @@ LEVEL_MAP = {
 TRADE_STYLES = {
     "buy":    {"color": "orange", "symbol": "triangle-up",   "name": "Buy"},
     "sell":   {"color": "cyan",   "symbol": "triangle-down", "name": "Sell"},
-    "market": {"color": "yellow", "symbol": "circle",        "name": "Market"},
 }
+
+# Light/neon trader fills, chosen to pop against the darker bid (blue),
+# ask (red), and mid (black) lines. Mirror of historical_chart.TRADER_PALETTE
+# so colors are consistent between Live and Historical tabs.
+TRADER_PALETTE = [
+    "#FFFF00",  # yellow
+    "#00FFFF",  # cyan
+    "#FF66FF",  # light magenta
+    "#99FF66",  # light lime
+    "#FFA500",  # orange
+    "#FF99CC",  # light pink
+    "#66CCFF",  # light blue
+    "#FFD700",  # gold
+    "#DDA0DD",  # plum
+    "#00FF99",  # mint
+]
+
+
+def _trader_color_map(names):
+    return {n: TRADER_PALETTE[i % len(TRADER_PALETTE)] for i, n in enumerate(sorted(names))}
 
 # Distinct colors for R3 trade-time overlays (avoids colors used elsewhere
 # on the chart: black mid, red/blue book levels, orange/cyan/yellow trades,
@@ -69,9 +88,10 @@ def register_callbacks(app):
          Input("qty-filter-exact", "value"),
          Input("wallmid-toggle", "value"),
          Input("dashboard-wallmid-toggle", "value"),
-         Input("r3-overlay-products", "value")],
+         Input("r3-overlay-products", "value"),
+         Input("trader-toggles", "value")],
     )
-    def update_main_chart(product, day, downsample, levels, trade_toggle, qty_range, qty_exact, wallmid_toggle, dashboard_wallmid_toggle, overlay_products):
+    def update_main_chart(product, day, downsample, levels, trade_toggle, qty_range, qty_exact, wallmid_toggle, dashboard_wallmid_toggle, overlay_products, selected_traders):
         if not product or not store.is_loaded():
             raise PreventUpdate
 
@@ -133,6 +153,21 @@ def register_callbacks(app):
                         (trades["quantity"] >= qty_range[0]) &
                         (trades["quantity"] <= qty_range[1])
                     ]
+                # Trader filter: keep trades where buyer OR seller is selected.
+                # SUBMISSION (our bot) is treated as a trader and shows up in the list.
+                if selected_traders is not None and {"buyer", "seller"}.issubset(trades.columns):
+                    has_named = (
+                        trades["buyer"].fillna("").astype(str).str.len().gt(0) |
+                        trades["seller"].fillna("").astype(str).str.len().gt(0)
+                    ).any()
+                    if has_named:
+                        sel = set(selected_traders)
+                        mask = (
+                            trades["buyer"].fillna("").astype(str).isin(sel) |
+                            trades["seller"].fillna("").astype(str).isin(sel)
+                        )
+                        trades = trades[mask]
+                # Our own (SUBMISSION) trades stay as orange/cyan triangles.
                 for side, style in TRADE_STYLES.items():
                     side_trades = trades[trades["side"] == side]
                     if side_trades.empty:
@@ -163,6 +198,75 @@ def register_callbacks(app):
                             seller,
                         )),
                     ))
+
+                # Market trades (between two non-SUBMISSION parties) — color by
+                # buyer, with seller available in the hover. Mirrors the
+                # historical chart so the same trader keeps the same color
+                # across Live and Historical tabs.
+                market_trades = trades[trades["side"] == "market"]
+                if not market_trades.empty:
+                    buyer = market_trades["buyer"].fillna("").astype(str)
+                    seller = market_trades["seller"].fillna("").astype(str)
+                    has_named = buyer.str.len().gt(0).any() or seller.str.len().gt(0).any()
+
+                    if has_named:
+                        cmap = _trader_color_map(store.get_traders())
+                        for buyer_name in sorted(buyer.unique()):
+                            mask = buyer == buyer_name
+                            sub = market_trades[mask]
+                            if sub.empty:
+                                continue
+                            display = buyer_name if buyer_name else "(unknown)"
+                            sub_seller = sub["seller"].fillna("").astype(str)
+                            fill_color = cmap.get(buyer_name, "yellow")
+                            fig.add_trace(go.Scatter(
+                                x=sub["timestamp"],
+                                y=sub["price"],
+                                mode="markers",
+                                name=f"buyer: {display}",
+                                marker={
+                                    "color": fill_color,
+                                    "symbol": "circle",
+                                    "size": 9,
+                                    "line": {"width": 1, "color": "black"},
+                                },
+                                hovertemplate=(
+                                    "t=%{x}<br>price=%{y}<br>"
+                                    "qty=%{customdata[0]}<br>"
+                                    "buyer=%{customdata[1]}<br>"
+                                    "seller=%{customdata[2]}"
+                                    "<extra></extra>"
+                                ),
+                                customdata=list(zip(
+                                    sub["quantity"],
+                                    [display] * len(sub),
+                                    [s if s else "(unknown)" for s in sub_seller],
+                                )),
+                            ))
+                    else:
+                        # Anonymous market trades — fall back to single yellow trace.
+                        b_label = buyer.replace("", "-")
+                        s_label = seller.replace("", "-")
+                        fig.add_trace(go.Scatter(
+                            x=market_trades["timestamp"],
+                            y=market_trades["price"],
+                            mode="markers",
+                            name="Market",
+                            marker={
+                                "color": "yellow",
+                                "symbol": "circle",
+                                "size": 8,
+                                "line": {"width": 1, "color": "black"},
+                            },
+                            hovertemplate=(
+                                "t=%{x}<br>price=%{y}<br>"
+                                "qty=%{customdata[0]}<br>"
+                                "buyer=%{customdata[1]}<br>"
+                                "seller=%{customdata[2]}"
+                                "<extra></extra>"
+                            ),
+                            customdata=list(zip(market_trades["quantity"], b_label, s_label)),
+                        ))
 
         # R3 trade-time overlays (dotted vertical lines per selected product)
         if overlay_products:
