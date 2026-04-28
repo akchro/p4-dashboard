@@ -20,7 +20,7 @@ R3_CONTAINER_STYLE = {
 }
 R4_CONTAINER_STYLE = {
     "display": "grid",
-    "gridTemplateRows": "32vh 38vh 28vh",
+    "gridTemplateRows": "26vh 32vh 22vh 22vh",
     "gap": "2px",
     "height": "100%",
 }

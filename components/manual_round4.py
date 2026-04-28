@@ -70,7 +70,7 @@ INSTRUMENTS = [
 
 CONTAINER_STYLE = {
     "display": "grid",
-    "gridTemplateRows": "32vh 38vh 28vh",
+    "gridTemplateRows": "26vh 32vh 22vh 22vh",
     "gap": "2px",
     "height": "100%",
 }
@@ -152,6 +152,143 @@ def _signed_edge(fair, bid, ask):
     if fair < bid:
         return float(fair - bid)
     return 0.0
+
+
+def _build_fresh_history_chart(history):
+    """Time-series of empirical means across Fresh 100× runs."""
+    fig = go.Figure()
+    if not history:
+        fig.add_annotation(
+            text="Click 'Fresh 100×' to plot empirical-mean history.",
+            x=0.5, y=0.5, xref="paper", yref="paper",
+            showarrow=False, font={"size": 12, "color": "#666"},
+        )
+        fig.update_layout(
+            title="Empirical mean across Fresh 100× runs",
+            xaxis_title="Run #",
+            yaxis_title="Mean PnL ($)",
+            template="plotly_white",
+            margin={"l": 60, "r": 20, "t": 40, "b": 40},
+        )
+        return fig
+
+    x = list(range(1, len(history) + 1))
+    means = [float(h.get("mean", 0.0)) for h in history]
+    p5s = [float(h.get("p5", 0.0)) for h in history]
+    p95s = [float(h.get("p95", 0.0)) for h in history]
+    sds = [float(h.get("sd", 0.0)) for h in history]
+
+    fig.add_trace(go.Scatter(
+        x=x + x[::-1],
+        y=p95s + p5s[::-1],
+        fill="toself",
+        fillcolor="rgba(31,119,180,0.15)",
+        line={"color": "rgba(0,0,0,0)"},
+        hoverinfo="skip",
+        showlegend=False,
+        name="p5-p95",
+    ))
+    fig.add_trace(go.Scatter(
+        x=x, y=means,
+        mode="lines+markers",
+        line={"color": "#1f77b4", "width": 2},
+        marker={"size": 7},
+        name="Mean",
+        customdata=list(zip(sds, p5s, p95s)),
+        hovertemplate=("Run %{x}<br>Mean=$%{y:,.0f}<br>"
+                       "SD=$%{customdata[0]:,.0f}<br>"
+                       "p5=$%{customdata[1]:,.0f}<br>"
+                       "p95=$%{customdata[2]:,.0f}<extra></extra>"),
+    ))
+    fig.add_hline(y=0, line={"color": "#333", "width": 1, "dash": "dot"})
+
+    overall = float(np.mean(means))
+    fig.add_hline(y=overall, line={"color": "#d62728", "width": 1, "dash": "dash"},
+                  annotation_text=f"avg of means=${overall:,.0f}",
+                  annotation_position="bottom right",
+                  annotation_font={"color": "#d62728", "size": 10})
+
+    fig.update_layout(
+        title=f"Empirical mean across Fresh 100× runs (n={len(history)})",
+        xaxis_title="Run #",
+        yaxis_title="Mean PnL ($)",
+        template="plotly_white",
+        margin={"l": 60, "r": 20, "t": 40, "b": 40},
+        showlegend=False,
+    )
+    return fig
+
+
+def _portfolio_optimize(payoffs, bids, asks, limits, lambda_risk):
+    """Mean-variance portfolio. Maximizes μᵀq − λ qᵀΣq with box constraints.
+
+    μ = (fair − mid) × 3000           per-unit expected $-edge
+    Σ = Cov(payoffs) / 100 × 3000²    covariance of 100-sim marks
+
+    Uses scipy L-BFGS-B for proper box-constrained QP, starting from the
+    max-edge corner so λ→0 gracefully degrades to sign(μ)×limit.
+    Tiny positions (|q| < 0.5) zeroed since spread would dominate edge.
+    """
+    from scipy.optimize import minimize, Bounds
+    bids_arr = np.asarray(bids, dtype=float)
+    asks_arr = np.asarray(asks, dtype=float)
+    lim_arr = np.asarray(limits, dtype=float)
+    fair = payoffs.mean(axis=1)
+    mu = (fair - 0.5 * (bids_arr + asks_arr)) * CONTRACT_SIZE
+    Sigma = np.cov(payoffs) * (CONTRACT_SIZE ** 2) / SCORING_N_SIMS
+
+    lam = max(float(lambda_risk), 0.0)
+    x0 = np.where(mu > 0, lim_arr, np.where(mu < 0, -lim_arr, 0.0))
+    if lam < 1e-15:
+        q = x0
+    else:
+        bounds = Bounds(-lim_arr, lim_arr)
+
+        def neg_obj(q):
+            return -(mu @ q - lam * q @ Sigma @ q)
+
+        def neg_grad(q):
+            return -(mu - 2.0 * lam * (Sigma @ q))
+
+        result = minimize(neg_obj, x0=x0, jac=neg_grad, method="L-BFGS-B",
+                          bounds=bounds, options={"maxiter": 200, "ftol": 1e-9})
+        q = result.x
+
+    q = np.where(np.abs(q) < 0.5, 0.0, q)
+    return np.round(q).astype(int).tolist()
+
+
+def _format_score_display(history, latest):
+    """Render the realized-score sidebar block from accumulated history."""
+    n = len(history)
+    if n == 0:
+        return html.Div(
+            "(no scoring runs yet)",
+            style={"color": "#888", "fontStyle": "italic"},
+        )
+    arr = np.array(history, dtype=float)
+    mean = float(arr.mean())
+    sd = float(arr.std(ddof=1)) if n > 1 else 0.0
+    p5 = float(np.percentile(arr, 5)) if n >= 5 else float(arr.min())
+    p95 = float(np.percentile(arr, 95)) if n >= 5 else float(arr.max())
+    win = float((arr > 0).mean())
+
+    children = []
+    if latest is not None:
+        color = "#2ca02c" if latest > 0 else "#d62728" if latest < 0 else "#333"
+        children.append(html.Div([
+            html.B("Last run: "),
+            html.Span(f"${latest:,.0f}",
+                      style={"color": color, "fontWeight": "bold"}),
+        ]))
+    children.extend([
+        html.Div([html.B(f"Runs: "), f"{n}"]),
+        html.Div([html.B("Empirical mean: "), f"${mean:,.0f}"]),
+        html.Div([html.B("Empirical SD: "), f"${sd:,.0f}"]),
+        html.Div([html.B("p5 / p95: "), f"${p5:,.0f} / ${p95:,.0f}"]),
+        html.Div([html.B("Win rate: "), f"{win:.1%}"]),
+    ])
+    return html.Div(children)
 
 
 def _position_table_layout():
@@ -250,6 +387,52 @@ def controls_layout():
         ),
 
         html.Hr(),
+        html.B("Mean-variance optimizer"),
+        html.Div(
+            "Solves max(E[PnL] − λ × Var[PnL]) under ±limit. Higher λ hedges "
+            "against the same covariance that drives seed-to-seed variation, "
+            "giving a strategy that's stable across both scoring noise and "
+            "different MC seeds.",
+            style={"fontSize": "10px", "color": "#666", "marginTop": "4px"},
+        ),
+        html.Label("Risk aversion λ (log10 scale)",
+                   style={"fontSize": "11px", "marginTop": "8px"}),
+        dcc.Slider(id="r4-risk-lambda", min=-12, max=-3, step=0.25, value=-7,
+                   marks={-12: "0", -10: "-10", -8: "-8", -6: "-6", -4: "-4",
+                          -3: "high"},
+                   tooltip={"placement": "bottom"}),
+        html.Button("Optimize portfolio", id="r4-preset-mvo", n_clicks=0,
+                    style={"fontSize": "11px", "padding": "4px 8px",
+                           "marginTop": "6px", "width": "100%"}),
+
+        html.Hr(),
+        html.B("Realized score (fresh 100-sim)"),
+        html.Div(
+            "Each click runs 100 fresh GBM paths (independent of MC pool) and "
+            "averages payoffs — exactly how the server scores. Click repeatedly "
+            "to build the empirical distribution.",
+            style={"fontSize": "10px", "color": "#666", "marginTop": "4px"},
+        ),
+        html.Div(style={"display": "flex", "gap": "4px", "flexWrap": "wrap",
+                        "marginTop": "6px"}, children=[
+            html.Button("Score 1×", id="r4-score-once", n_clicks=0,
+                        style={"fontSize": "11px", "padding": "4px 8px"}),
+            html.Button("Score 100×", id="r4-score-batch", n_clicks=0,
+                        style={"fontSize": "11px", "padding": "4px 8px"}),
+            html.Button("Fresh 100×", id="r4-score-fresh", n_clicks=0,
+                        style={"fontSize": "11px", "padding": "4px 8px"}),
+            html.Button("Reset", id="r4-score-reset", n_clicks=0,
+                        style={"fontSize": "11px", "padding": "4px 8px"}),
+            html.Button("Reset graph", id="r4-fresh-history-reset", n_clicks=0,
+                        style={"fontSize": "11px", "padding": "4px 8px"}),
+        ]),
+        html.Div(id="r4-score-display", style={
+            "marginTop": "6px", "fontSize": "11px", "lineHeight": "1.5",
+        }),
+        dcc.Store(id="r4-score-history", data=[]),
+        dcc.Store(id="r4-fresh-history", data=[]),
+
+        html.Hr(),
         html.B("Portfolio"),
         html.Div(id="r4-portfolio-stats", style={
             "fontSize": "11px", "lineHeight": "1.6", "marginTop": "6px",
@@ -274,6 +457,8 @@ def charts_layout():
                 html.Div(dcc.Graph(id="r4-payoff-diagram", style={"height": "100%"}),
                          style={"border": "1px solid #ddd", "borderRadius": "4px"}),
             ]),
+            html.Div(dcc.Graph(id="r4-fresh-history-chart", style={"height": "100%"}),
+                     style={"border": "1px solid #ddd", "borderRadius": "4px"}),
         ],
     )
 
@@ -573,16 +758,19 @@ def register_callbacks(app):
         qty_outputs,
         [Input("r4-preset-zero", "n_clicks"),
          Input("r4-preset-edge", "n_clicks"),
-         Input("r4-preset-hedge", "n_clicks")],
+         Input("r4-preset-hedge", "n_clicks"),
+         Input("r4-preset-mvo", "n_clicks")],
         [State("r4-s0", "value"),
          State("r4-sigma", "value"),
          State("r4-n-sims", "value"),
          State("r4-seed", "value"),
+         State("r4-risk-lambda", "value"),
          *qty_states],
         prevent_initial_call=True,
     )
-    def apply_preset(_zero_clicks, _edge_clicks, _hedge_clicks,
-                     s0, sigma, n_sims, seed, *qty_state_vals):
+    def apply_preset(_zero_clicks, _edge_clicks, _hedge_clicks, _mvo_clicks,
+                     s0, sigma, n_sims, seed, risk_log_lambda,
+                     *qty_state_vals):
         ctx = callback_context
         if not ctx.triggered:
             return [no_update] * len(INSTRUMENTS)
@@ -624,4 +812,100 @@ def register_callbacks(app):
                              -INSTRUMENTS[0]["limit"])
             return [ac_neutral] + [no_update] * (len(INSTRUMENTS) - 1)
 
+        if button == "r4-preset-mvo":
+            payoffs, _, _ = _all_payoffs(s0, sigma, n_sims, seed)
+            bids = [i["bid"] for i in INSTRUMENTS]
+            asks = [i["ask"] for i in INSTRUMENTS]
+            limits = [i["limit"] for i in INSTRUMENTS]
+            lam = 10.0 ** float(risk_log_lambda if risk_log_lambda is not None else -7)
+            return _portfolio_optimize(payoffs, bids, asks, limits, lam)
+
         return [no_update] * len(INSTRUMENTS)
+
+    @app.callback(
+        [Output("r4-score-display", "children"),
+         Output("r4-score-history", "data"),
+         Output("r4-fresh-history", "data")],
+        [Input("r4-score-once", "n_clicks"),
+         Input("r4-score-batch", "n_clicks"),
+         Input("r4-score-fresh", "n_clicks"),
+         Input("r4-score-reset", "n_clicks"),
+         Input("r4-fresh-history-reset", "n_clicks")],
+        [State("r4-s0", "value"),
+         State("r4-sigma", "value"),
+         State("r4-score-history", "data"),
+         State("r4-fresh-history", "data"),
+         *qty_states],
+        prevent_initial_call=True,
+    )
+    def run_realized_score(_once_clicks, _batch_clicks, _fresh_clicks,
+                           _reset_clicks, _fresh_reset_clicks,
+                           s0, sigma, history, fresh_hist, *qty_state_vals):
+        ctx = callback_context
+        if not ctx.triggered:
+            return no_update, no_update, no_update
+        button = ctx.triggered[0]["prop_id"].split(".")[0]
+
+        if button == "r4-fresh-history-reset":
+            return no_update, no_update, []
+
+        if button == "r4-score-reset":
+            return _format_score_display([], None), [], no_update
+
+        s0 = float(s0) if s0 not in (None, "") else S0_DEFAULT
+        sigma = (float(sigma) if sigma not in (None, "") and float(sigma) > 0
+                 else SIGMA_ANN_DEFAULT)
+        qtys = [int(q) if q not in (None, "") else 0 for q in qty_state_vals]
+        bids = np.array([i["bid"] for i in INSTRUMENTS])
+        asks = np.array([i["ask"] for i in INSTRUMENTS])
+        qty_arr = np.array(qtys, dtype=float)
+        exec_prices = np.array([_exec_price(q, b, a) for q, b, a in zip(qtys, bids, asks)])
+
+        if button == "r4-score-fresh":
+            history = []
+        else:
+            history = list(history or [])
+        fresh_hist = list(fresh_hist or [])
+
+        n_batches = 1 if button == "r4-score-once" else 100
+        # Mix click counts + history length into seed so each click is unique.
+        base_seed = (len(history) * 1009 + int(_once_clicks or 0) * 31337
+                     + int(_batch_clicks or 0) * 99991
+                     + int(_fresh_clicks or 0) * 65537) % 1_000_000
+
+        new_pnls = []
+        for k in range(n_batches):
+            seed_k = (base_seed + k * 7919) % 1_000_000
+            z = _z_for_seed(seed_k, SCORING_N_SIMS, WEEKS_3_STEPS)
+            log_paths_fresh = _log_paths(z, sigma)
+            paths_fresh = _paths(s0, log_paths_fresh)
+            payoffs_fresh = _payoffs_from_paths(paths_fresh)
+            marks = payoffs_fresh.mean(axis=1)
+            realized_pnl = float(((marks - exec_prices) * qty_arr * CONTRACT_SIZE).sum())
+            new_pnls.append(realized_pnl)
+            history.append(realized_pnl)
+
+        if len(history) > 5000:
+            history = history[-5000:]
+
+        if button == "r4-score-fresh" and new_pnls:
+            arr = np.array(new_pnls, dtype=float)
+            fresh_hist.append({
+                "mean": float(arr.mean()),
+                "sd": float(arr.std(ddof=1)) if len(arr) > 1 else 0.0,
+                "p5": float(np.percentile(arr, 5)),
+                "p95": float(np.percentile(arr, 95)),
+                "n": int(len(arr)),
+            })
+            if len(fresh_hist) > 200:
+                fresh_hist = fresh_hist[-200:]
+
+        latest = new_pnls[-1] if new_pnls else None
+        return _format_score_display(history, latest), history, fresh_hist
+
+    @app.callback(
+        Output("r4-fresh-history-chart", "figure"),
+        Input("r4-fresh-history", "data"),
+    )
+    def render_fresh_history_chart(fresh_hist):
+        return _build_fresh_history_chart(fresh_hist or [])
