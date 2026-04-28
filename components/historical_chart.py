@@ -2,6 +2,7 @@ import plotly.graph_objects as go
 from dash import html, dcc, Input, Output
 from dash.exceptions import PreventUpdate
 from data import historical_store
+from components import zscore_overlay
 
 BID_COLORS = ["#0000FF", "#4444FF", "#8888FF"]
 ASK_COLORS = ["#FF0000", "#FF4444", "#FF8888"]
@@ -20,24 +21,86 @@ OVERLAY_COLORS = [
     "#17becf", "#ff7f0e", "#1f77b4", "#d62728", "#aec7e8", "#98df8a",
 ]
 
-# Light/neon trader fills, chosen to pop against the darker bid (blue),
-# ask (red), and mid (black) lines.
+# Mid-saturation trader colors. Each marker has a thin black outer outline
+# so dark colors still pop against the bid/ask/mid lines; darker palette
+# gives buyer-fill vs seller-ring more contrast against each other.
 TRADER_PALETTE = [
-    "#FFFF00",  # yellow
-    "#00FFFF",  # cyan
-    "#FF66FF",  # light magenta
-    "#99FF66",  # light lime
-    "#FFA500",  # orange
-    "#FF99CC",  # light pink
-    "#66CCFF",  # light blue
-    "#FFD700",  # gold
-    "#DDA0DD",  # plum
-    "#00FF99",  # mint
+    "#D32F2F",  # red
+    "#1976D2",  # blue
+    "#388E3C",  # green
+    "#7B1FA2",  # purple
+    "#F57C00",  # orange
+    "#0097A7",  # teal
+    "#FBC02D",  # yellow
+    "#5D4037",  # brown
+    "#C2185B",  # pink
+    "#455A64",  # blue-gray
 ]
 
 
 def _trader_color_map(names):
     return {n: TRADER_PALETTE[i % len(TRADER_PALETTE)] for i, n in enumerate(sorted(names))}
+
+
+def _add_split_trade_markers(fig, trades, buyer, seller, cmap):
+    # Stack two markers per trade:
+    #   outer (size 11) — seller color fill, thin black outline (graph contrast)
+    #   inner (size 6)  — buyer color fill, no outline
+    # Result: black ring → seller color ring → buyer color core.
+    if trades.empty:
+        return
+
+    qty = trades["quantity"].tolist()
+    ts = trades["timestamp"].tolist()
+    px = trades["price"].tolist()
+    buyers = list(buyer)
+    sellers = list(seller)
+    buyer_disp = [b if b else "(unknown)" for b in buyers]
+    seller_disp = [s if s else "(unknown)" for s in sellers]
+    hover = (
+        "t=%{x}<br>price=%{y}<br>"
+        "qty=%{customdata[0]}<br>"
+        "buyer=%{customdata[1]}<br>"
+        "seller=%{customdata[2]}"
+        "<extra></extra>"
+    )
+
+    for buyer_name in sorted(set(buyers)):
+        idxs = [i for i in range(len(trades)) if buyers[i] == buyer_name]
+        if not idxs:
+            continue
+        display = buyer_name if buyer_name else "(unknown)"
+        fill_color = cmap.get(buyer_name, "yellow") if buyer_name else "lightgray"
+        seller_colors = [
+            cmap.get(sellers[i], "lightgray") if sellers[i] else "lightgray"
+            for i in idxs
+        ]
+        xs = [ts[i] for i in idxs]
+        ys = [px[i] for i in idxs]
+        cd = [(qty[i], buyer_disp[i], seller_disp[i]) for i in idxs]
+
+        fig.add_trace(go.Scatter(
+            x=xs, y=ys, mode="markers",
+            name=f"buyer: {display}", legendgroup=display, showlegend=False,
+            marker={
+                "color": seller_colors,
+                "symbol": "circle",
+                "size": 11,
+                "line": {"width": 1, "color": "black"},
+            },
+            hovertemplate=hover, customdata=cd,
+        ))
+        fig.add_trace(go.Scatter(
+            x=xs, y=ys, mode="markers",
+            name=f"buyer: {display}", legendgroup=display, showlegend=True,
+            marker={
+                "color": fill_color,
+                "symbol": "circle",
+                "size": 6,
+                "line": {"width": 0},
+            },
+            hovertemplate=hover, customdata=cd,
+        ))
 
 
 def layout():
@@ -58,9 +121,13 @@ def register_callbacks(app):
          Input("hist-qty-filter-exact", "value"),
          Input("hist-wallmid-toggle", "value"),
          Input("hist-r3-overlay-products", "value"),
-         Input("hist-trader-toggles", "value")],
+         Input("hist-trader-toggles", "value"),
+         Input("hist-zscore-toggle", "value"),
+         Input("hist-zscore-mean", "value"),
+         Input("hist-zscore-entry", "value"),
+         Input("hist-zscore-exit", "value")],
     )
-    def update_hist_chart(product, day, downsample, levels, trade_toggle, qty_range, qty_exact, wallmid_toggle, overlay_products, selected_traders):
+    def update_hist_chart(product, day, downsample, levels, trade_toggle, qty_range, qty_exact, wallmid_toggle, overlay_products, selected_traders, zscore_toggle, zscore_mu, zscore_entry, zscore_exit):
         if not product or not historical_store.is_loaded():
             raise PreventUpdate
 
@@ -140,42 +207,7 @@ def register_callbacks(app):
                         # colors stay consistent across product/day switches.
                         all_traders = historical_store.get_traders()
                         cmap = _trader_color_map(all_traders)
-                        # Group dots by buyer; outline color encodes seller. Both visible at once.
-                        for buyer_name in sorted(buyer.unique()):
-                            mask = buyer == buyer_name
-                            sub = trades[mask]
-                            if sub.empty:
-                                continue
-                            display = buyer_name if buyer_name else "(unknown)"
-                            sub_seller = (
-                                sub["seller"].fillna("").astype(str) if has_seller_col
-                                else [""] * len(sub)
-                            )
-                            fill_color = cmap.get(buyer_name, "yellow")
-                            fig.add_trace(go.Scatter(
-                                x=sub["timestamp"],
-                                y=sub["price"],
-                                mode="markers",
-                                name=f"buyer: {display}",
-                                marker={
-                                    "color": fill_color,
-                                    "symbol": "circle",
-                                    "size": 9,
-                                    "line": {"width": 1, "color": "black"},
-                                },
-                                hovertemplate=(
-                                    "t=%{x}<br>price=%{y}<br>"
-                                    "qty=%{customdata[0]}<br>"
-                                    "buyer=%{customdata[1]}<br>"
-                                    "seller=%{customdata[2]}"
-                                    "<extra></extra>"
-                                ),
-                                customdata=list(zip(
-                                    sub["quantity"],
-                                    [display] * len(sub),
-                                    [s if s else "(unknown)" for s in sub_seller],
-                                )),
-                            ))
+                        _add_split_trade_markers(fig, trades, buyer, seller, cmap)
                     else:
                         # Anonymous trades (e.g. ROUND_3) — keep the original single yellow trace.
                         b_label = (
@@ -233,6 +265,9 @@ def register_callbacks(app):
                     "showgrid": False, "showticklabels": False, "fixedrange": True,
                 },
             )
+
+        zscore_overlay.add_lines(fig, product, zscore_toggle,
+                                 zscore_mu, zscore_entry, zscore_exit)
 
         fig.update_layout(
             title=f"{product} Order Book (Historical)",

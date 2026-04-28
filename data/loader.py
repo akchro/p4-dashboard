@@ -64,10 +64,15 @@ def load_log(filepath: str) -> dict:
     # Parse wallmid from lambdaLog (optional — not all logs have it)
     activities = _merge_wallmid(activities, logs)
 
+    # Parse bull_signal from lambdaLog (optional — only present when an
+    # algorithm prints it, e.g. voucher_bull_signal_probe.py)
+    bull_signals = _parse_bull_signals(logs, activities)
+
     return {
         "activities": activities,
         "trades": trades,
         "logs": logs,
+        "bull_signals": bull_signals,
         "submission_id": raw.get("submissionId", ""),
     }
 
@@ -81,6 +86,7 @@ def _classify_side(row):
 
 
 _WALLMID_RE = re.compile(r"wallmid:\s*([\d.eE+-]+)")
+_BULL_SIGNAL_RE = re.compile(r"bull_signal:\s*(-?\d+)")
 
 
 def _merge_wallmid(activities, logs):
@@ -115,3 +121,38 @@ def _merge_wallmid(activities, logs):
     wm = pd.DataFrame(rows)
     activities = activities.merge(wm, on=["timestamp", "product"], how="left")
     return activities
+
+
+def _parse_bull_signals(logs, activities):
+    """Extract bull_signal values from lambdaLog. Returns a DataFrame with
+    columns [timestamp, day, bull] containing only ticks where the marker
+    was printed. Empty DataFrame if no markers found."""
+    cols = ["timestamp", "day", "bull"]
+    if logs.empty or "lambdaLog" not in logs.columns:
+        return pd.DataFrame(columns=cols)
+
+    rows = []
+    for _, log_row in logs.iterrows():
+        ts = log_row.get("timestamp")
+        text = log_row.get("lambdaLog")
+        if pd.isna(ts) or not isinstance(text, str):
+            continue
+        m = _BULL_SIGNAL_RE.search(text)
+        if m:
+            rows.append({"timestamp": int(ts), "bull": int(m.group(1))})
+
+    if not rows:
+        return pd.DataFrame(columns=cols)
+
+    df = pd.DataFrame(rows)
+    if not activities.empty:
+        day_bounds = activities.groupby("day")["timestamp"].agg(["min", "max"])
+        def _assign_day(ts):
+            for day, (lo, hi) in day_bounds.iterrows():
+                if lo <= ts <= hi:
+                    return day
+            return day_bounds.index[0]
+        df["day"] = df["timestamp"].apply(_assign_day)
+    else:
+        df["day"] = 0
+    return df[cols]

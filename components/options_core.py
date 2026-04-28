@@ -221,6 +221,10 @@ def build_smile_figure(store_module, strikes, day, tte_start, downsample, x_axis
         "moneyness_sk"  → log-moneyness m = ln(S/K) / √T  (call-ITM is positive)
     Each strike gets its own color (shared with overlay / IV-TS). Optional
     quadratic fit is one parabola through the combined cloud.
+
+    Floor-pinned points (voucher price ≤ 0.5 + eps where the tick grid clamps
+    deep OTM) are drawn as open markers and excluded from the fit — their IVs
+    are artifacts of price quantization, not real surface readings.
     """
     if not strikes or not store_module.is_loaded():
         return _empty("Select one or more voucher strikes")
@@ -231,8 +235,11 @@ def build_smile_figure(store_module, strikes, day, tte_start, downsample, x_axis
     ve_ds = _downsample(ve, downsample)
 
     fig = go.Figure()
-    all_x = []
-    all_y = []
+    fit_x = []   # only non-floor points feed the fit
+    fit_y = []
+    floor_eps = 1e-3
+    floor_count_total = 0
+    real_count_total = 0
 
     for K in strikes:
         try:
@@ -252,42 +259,72 @@ def build_smile_figure(store_module, strikes, day, tte_start, downsample, x_axis
             continue
         T = opts.time_to_expiry(merged["timestamp"].values, float(tte_start))
         K_arr = np.full(len(merged), K_int, dtype=float)
-        iv = opts.implied_vol(merged["C"].values, merged["S"].values, K_arr, T)
-        m = opts.log_moneyness(K_arr, merged["S"].values, T)
+        C_arr = merged["C"].values
+        S_arr = merged["S"].values
+        iv = opts.implied_vol(C_arr, S_arr, K_arr, T)
+        m = opts.log_moneyness(K_arr, S_arr, T)
         valid = np.isfinite(iv)
         if not valid.any():
             continue
 
+        # Floor-pinning: voucher mid sits at the 0.5 tick floor (deep OTM)
+        # — IV is a quantization artifact, not a market view.
+        is_floor = C_arr <= 0.5 + floor_eps
+
         if x_axis == "moneyness":
-            xs = m[valid]
+            xs_full = m
         elif x_axis == "moneyness_sk":
-            xs = -m[valid]
+            xs_full = -m
         else:
-            xs = K_arr[valid]
-        ys = iv[valid]
-        ts = merged["timestamp"].values[valid]
-        all_x.append(xs)
-        all_y.append(ys)
+            xs_full = K_arr
 
-        fig.add_trace(go.Scatter(
-            x=xs, y=ys, mode="markers",
-            name=f"VEV_{K_int}",
-            marker={"color": strike_color(K_int), "size": 4, "opacity": 0.55},
-            customdata=ts,
-            hovertemplate=(
-                f"K={K_int}<br>"
-                "t=%{customdata:,}<br>"
-                "x=%{x:.4f}<br>"
-                "IV=%{y:.5f}<extra></extra>"
-            ),
-        ))
+        real_mask = valid & ~is_floor
+        floor_mask = valid & is_floor
+        ts_arr = merged["timestamp"].values
 
-    if not all_x:
+        if real_mask.any():
+            real_count_total += int(real_mask.sum())
+            fit_x.append(xs_full[real_mask])
+            fit_y.append(iv[real_mask])
+            fig.add_trace(go.Scatter(
+                x=xs_full[real_mask], y=iv[real_mask], mode="markers",
+                name=f"VEV_{K_int}",
+                marker={"color": strike_color(K_int), "size": 4, "opacity": 0.55},
+                customdata=ts_arr[real_mask],
+                hovertemplate=(
+                    f"K={K_int}<br>"
+                    "t=%{customdata:,}<br>"
+                    "x=%{x:.4f}<br>"
+                    "IV=%{y:.5f}<extra></extra>"
+                ),
+            ))
+        if floor_mask.any():
+            floor_count_total += int(floor_mask.sum())
+            fig.add_trace(go.Scatter(
+                x=xs_full[floor_mask], y=iv[floor_mask], mode="markers",
+                name=f"VEV_{K_int} (floor-pinned)",
+                marker={
+                    "color": strike_color(K_int),
+                    "size": 5, "opacity": 0.4,
+                    "symbol": "circle-open",
+                    "line": {"width": 1, "color": strike_color(K_int)},
+                },
+                customdata=ts_arr[floor_mask],
+                hovertemplate=(
+                    f"K={K_int} (FLOOR)<br>"
+                    "t=%{customdata:,}<br>"
+                    "x=%{x:.4f}<br>"
+                    "IV=%{y:.5f} (artifact)<extra></extra>"
+                ),
+                showlegend=True,
+            ))
+
+    if not fit_x and floor_count_total == 0:
         return _empty("No solvable IVs across selected strikes")
 
-    if show_fit:
-        xs_all = np.concatenate(all_x)
-        ys_all = np.concatenate(all_y)
+    if show_fit and fit_x:
+        xs_all = np.concatenate(fit_x)
+        ys_all = np.concatenate(fit_y)
         if len(xs_all) >= 3:
             try:
                 coef = np.polyfit(xs_all, ys_all, 2)
@@ -295,7 +332,7 @@ def build_smile_figure(store_module, strikes, day, tte_start, downsample, x_axis
                 yfit = np.polyval(coef, xfit)
                 fig.add_trace(go.Scatter(
                     x=xfit, y=yfit, mode="lines",
-                    name=f"fit: {coef[0]:.4g}x² + {coef[1]:.4g}x + {coef[2]:.4g}",
+                    name=f"fit (excl. floor): {coef[0]:.4g}x² + {coef[1]:.4g}x + {coef[2]:.4g}",
                     line={"color": "#000000", "width": 2.5},
                 ))
             except (np.linalg.LinAlgError, ValueError):
@@ -305,8 +342,11 @@ def build_smile_figure(store_module, strikes, day, tte_start, downsample, x_axis
         "moneyness": "log-moneyness m = ln(K/S)/√T",
         "moneyness_sk": "log-moneyness m = ln(S/K)/√T",
     }.get(x_axis, "Strike K")
+    title = "Volatility Smile · full day (color = strike)"
+    if floor_count_total:
+        title += f"  ·  {real_count_total} real / {floor_count_total} floor-pinned (open markers, excl. from fit)"
     fig.update_layout(
-        title="Volatility Smile · full day (color = strike)",
+        title=title,
         xaxis_title=x_label,
         yaxis_title="Implied Volatility (per √day)",
         margin={"l": 50, "r": 20, "t": 40, "b": 40},

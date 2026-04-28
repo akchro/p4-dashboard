@@ -83,6 +83,17 @@ def get_submission_id():
     return _data["submission_id"]
 
 
+def get_bull_signals(day=None):
+    """Return DataFrame of bull_signal prints (timestamp, day, bull).
+    Empty if the loaded log doesn't include bull_signal markers."""
+    df = _data.get("bull_signals")
+    if df is None or df.empty:
+        return pd.DataFrame(columns=["timestamp", "day", "bull"])
+    if day is not None:
+        df = df[df["day"] == day]
+    return df
+
+
 def get_log_files():
     pattern = os.path.join(LOGS_DIR, "*.log")
     return sorted(_glob.glob(pattern))

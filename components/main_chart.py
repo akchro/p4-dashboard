@@ -4,6 +4,7 @@ import plotly.graph_objects as go
 from dash import html, dcc, Input, Output, State
 from dash.exceptions import PreventUpdate
 from data import store
+from components import zscore_overlay
 
 BID_COLORS = ["#0000FF", "#4444FF", "#8888FF"]
 ASK_COLORS = ["#FF0000", "#FF4444", "#FF8888"]
@@ -22,25 +23,86 @@ TRADE_STYLES = {
     "sell":   {"color": "cyan",   "symbol": "triangle-down", "name": "Sell"},
 }
 
-# Light/neon trader fills, chosen to pop against the darker bid (blue),
-# ask (red), and mid (black) lines. Mirror of historical_chart.TRADER_PALETTE
-# so colors are consistent between Live and Historical tabs.
+# Mid-saturation trader colors. Each marker has a thin black outer outline
+# so dark colors still pop against the bid/ask/mid lines. Mirror of
+# historical_chart.TRADER_PALETTE so colors are consistent across tabs.
 TRADER_PALETTE = [
-    "#FFFF00",  # yellow
-    "#00FFFF",  # cyan
-    "#FF66FF",  # light magenta
-    "#99FF66",  # light lime
-    "#FFA500",  # orange
-    "#FF99CC",  # light pink
-    "#66CCFF",  # light blue
-    "#FFD700",  # gold
-    "#DDA0DD",  # plum
-    "#00FF99",  # mint
+    "#D32F2F",  # red
+    "#1976D2",  # blue
+    "#388E3C",  # green
+    "#7B1FA2",  # purple
+    "#F57C00",  # orange
+    "#0097A7",  # teal
+    "#FBC02D",  # yellow
+    "#5D4037",  # brown
+    "#C2185B",  # pink
+    "#455A64",  # blue-gray
 ]
 
 
 def _trader_color_map(names):
     return {n: TRADER_PALETTE[i % len(TRADER_PALETTE)] for i, n in enumerate(sorted(names))}
+
+
+def _add_split_trade_markers(fig, trades, buyer, seller, cmap):
+    # Stack two markers per trade:
+    #   outer (size 11) — seller color fill, thin black outline (graph contrast)
+    #   inner (size 6)  — buyer color fill, no outline
+    # Result: black ring → seller color ring → buyer color core.
+    if trades.empty:
+        return
+
+    qty = trades["quantity"].tolist()
+    ts = trades["timestamp"].tolist()
+    px = trades["price"].tolist()
+    buyers = list(buyer)
+    sellers = list(seller)
+    buyer_disp = [b if b else "(unknown)" for b in buyers]
+    seller_disp = [s if s else "(unknown)" for s in sellers]
+    hover = (
+        "t=%{x}<br>price=%{y}<br>"
+        "qty=%{customdata[0]}<br>"
+        "buyer=%{customdata[1]}<br>"
+        "seller=%{customdata[2]}"
+        "<extra></extra>"
+    )
+
+    for buyer_name in sorted(set(buyers)):
+        idxs = [i for i in range(len(trades)) if buyers[i] == buyer_name]
+        if not idxs:
+            continue
+        display = buyer_name if buyer_name else "(unknown)"
+        fill_color = cmap.get(buyer_name, "yellow") if buyer_name else "lightgray"
+        seller_colors = [
+            cmap.get(sellers[i], "lightgray") if sellers[i] else "lightgray"
+            for i in idxs
+        ]
+        xs = [ts[i] for i in idxs]
+        ys = [px[i] for i in idxs]
+        cd = [(qty[i], buyer_disp[i], seller_disp[i]) for i in idxs]
+
+        fig.add_trace(go.Scatter(
+            x=xs, y=ys, mode="markers",
+            name=f"buyer: {display}", legendgroup=display, showlegend=False,
+            marker={
+                "color": seller_colors,
+                "symbol": "circle",
+                "size": 11,
+                "line": {"width": 1, "color": "black"},
+            },
+            hovertemplate=hover, customdata=cd,
+        ))
+        fig.add_trace(go.Scatter(
+            x=xs, y=ys, mode="markers",
+            name=f"buyer: {display}", legendgroup=display, showlegend=True,
+            marker={
+                "color": fill_color,
+                "symbol": "circle",
+                "size": 6,
+                "line": {"width": 0},
+            },
+            hovertemplate=hover, customdata=cd,
+        ))
 
 # Distinct colors for R3 trade-time overlays (avoids colors used elsewhere
 # on the chart: black mid, red/blue book levels, orange/cyan/yellow trades,
@@ -88,10 +150,15 @@ def register_callbacks(app):
          Input("qty-filter-exact", "value"),
          Input("wallmid-toggle", "value"),
          Input("dashboard-wallmid-toggle", "value"),
+         Input("bull-signal-toggle", "value"),
          Input("r3-overlay-products", "value"),
-         Input("trader-toggles", "value")],
+         Input("trader-toggles", "value"),
+         Input("live-zscore-toggle", "value"),
+         Input("live-zscore-mean", "value"),
+         Input("live-zscore-entry", "value"),
+         Input("live-zscore-exit", "value")],
     )
-    def update_main_chart(product, day, downsample, levels, trade_toggle, qty_range, qty_exact, wallmid_toggle, dashboard_wallmid_toggle, overlay_products, selected_traders):
+    def update_main_chart(product, day, downsample, levels, trade_toggle, qty_range, qty_exact, wallmid_toggle, dashboard_wallmid_toggle, bull_signal_toggle, overlay_products, selected_traders, zscore_toggle, zscore_mu, zscore_entry, zscore_exit):
         if not product or not store.is_loaded():
             raise PreventUpdate
 
@@ -211,38 +278,7 @@ def register_callbacks(app):
 
                     if has_named:
                         cmap = _trader_color_map(store.get_traders())
-                        for buyer_name in sorted(buyer.unique()):
-                            mask = buyer == buyer_name
-                            sub = market_trades[mask]
-                            if sub.empty:
-                                continue
-                            display = buyer_name if buyer_name else "(unknown)"
-                            sub_seller = sub["seller"].fillna("").astype(str)
-                            fill_color = cmap.get(buyer_name, "yellow")
-                            fig.add_trace(go.Scatter(
-                                x=sub["timestamp"],
-                                y=sub["price"],
-                                mode="markers",
-                                name=f"buyer: {display}",
-                                marker={
-                                    "color": fill_color,
-                                    "symbol": "circle",
-                                    "size": 9,
-                                    "line": {"width": 1, "color": "black"},
-                                },
-                                hovertemplate=(
-                                    "t=%{x}<br>price=%{y}<br>"
-                                    "qty=%{customdata[0]}<br>"
-                                    "buyer=%{customdata[1]}<br>"
-                                    "seller=%{customdata[2]}"
-                                    "<extra></extra>"
-                                ),
-                                customdata=list(zip(
-                                    sub["quantity"],
-                                    [display] * len(sub),
-                                    [s if s else "(unknown)" for s in sub_seller],
-                                )),
-                            ))
+                        _add_split_trade_markers(fig, market_trades, buyer, seller, cmap)
                     else:
                         # Anonymous market trades — fall back to single yellow trace.
                         b_label = buyer.replace("", "-")
@@ -268,6 +304,33 @@ def register_callbacks(app):
                             customdata=list(zip(market_trades["quantity"], b_label, s_label)),
                         ))
 
+        need_yaxis2 = False
+
+        # Bull-signal up-arrows pinned to ask_price_1 of the displayed product
+        # (signal is global; the y-anchor is per-product so the marker sits on
+        # the touch ask at that tick).
+        if bull_signal_toggle and "show" in bull_signal_toggle and "ask_price_1" in acts.columns:
+            bull_df = store.get_bull_signals(day)
+            bull_df = bull_df[bull_df["bull"] > 0]
+            if not bull_df.empty:
+                ask1 = acts[["timestamp", "ask_price_1"]].dropna(subset=["ask_price_1"])
+                merged = bull_df.merge(ask1, on="timestamp", how="inner")
+                if not merged.empty:
+                    fig.add_trace(go.Scatter(
+                        x=merged["timestamp"],
+                        y=merged["ask_price_1"],
+                        mode="markers",
+                        name=f"Bull Signal ({len(merged)})",
+                        marker={
+                            "color": "#00C853",
+                            "symbol": "triangle-up",
+                            "size": 10,
+                            "line": {"width": 1, "color": "black"},
+                        },
+                        hovertemplate="t=%{x}<br>ask_1=%{y}<br>bull=%{customdata}<extra></extra>",
+                        customdata=merged["bull"].tolist(),
+                    ))
+
         # R3 trade-time overlays (dotted vertical lines per selected product)
         if overlay_products:
             for i, op in enumerate(overlay_products):
@@ -290,12 +353,18 @@ def register_callbacks(app):
                     hoverinfo="skip",
                     showlegend=True,
                 ))
+            need_yaxis2 = True
+
+        if need_yaxis2:
             fig.update_layout(
                 yaxis2={
                     "overlaying": "y", "range": [0, 1],
                     "showgrid": False, "showticklabels": False, "fixedrange": True,
                 },
             )
+
+        zscore_overlay.add_lines(fig, product, zscore_toggle,
+                                 zscore_mu, zscore_entry, zscore_exit)
 
         fig.update_layout(
             title=f"{product} Order Book",

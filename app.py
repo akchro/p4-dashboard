@@ -7,8 +7,9 @@ from components import (
     historical_controls, historical_chart, historical_volume,
     historical_filters, historical_performance,
 )
-from components import manual_controls, manual_round2, manual_round3
+from components import manual_controls, manual_round2, manual_round3, manual_round4
 from components import options_live, options_historical, r3_bid_velocity, historical_player_pnl
+from components import zscore_overlay
 
 app = Dash(__name__)
 app.config.suppress_callback_exceptions = True
@@ -63,6 +64,8 @@ live_tab = html.Div(style={
         html.Hr(),
         trade_filters.layout(),
         html.Hr(),
+        zscore_overlay.layout("live"),
+        html.Hr(),
         performance_controls.layout(),
     ]),
 ])
@@ -98,6 +101,8 @@ historical_tab = html.Div(style={
         html.Hr(),
         historical_filters.layout(),
         html.Hr(),
+        zscore_overlay.layout("hist"),
+        html.Hr(),
         historical_performance.layout(),
     ]),
 ])
@@ -112,6 +117,7 @@ manual_tab = html.Div(style={
     html.Div(style={"gridColumn": "1"}, children=[
         manual_round2.charts_layout(),
         manual_round3.charts_layout(),
+        manual_round4.charts_layout(),
     ]),
     html.Div(style={
         **SIDEBAR_STYLE, "gridColumn": "2",
@@ -121,6 +127,7 @@ manual_tab = html.Div(style={
         html.Hr(),
         manual_round2.controls_layout(),
         manual_round3.controls_layout(),
+        manual_round4.controls_layout(),
     ]),
 ])
 
@@ -143,10 +150,11 @@ for module in [historical_controls, historical_chart, historical_volume,
                historical_filters, historical_performance]:
     module.register_callbacks(app)
 
-for module in [options_live, options_historical, r3_bid_velocity, historical_player_pnl]:
+for module in [options_live, options_historical, r3_bid_velocity, historical_player_pnl,
+               zscore_overlay]:
     module.register_callbacks(app)
 
-for module in [manual_controls, manual_round2, manual_round3]:
+for module in [manual_controls, manual_round2, manual_round3, manual_round4]:
     module.register_callbacks(app)
 
 if __name__ == "__main__":

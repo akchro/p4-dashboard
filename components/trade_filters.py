@@ -38,6 +38,12 @@ def layout():
             value=[],
             inputStyle={"marginRight": "4px"},
         ),
+        dcc.Checklist(
+            id="bull-signal-toggle",
+            options=[{"label": "Bull Signal", "value": "show"}],
+            value=[],
+            inputStyle={"marginRight": "4px"},
+        ),
         html.Br(),
         html.Label("Trades", style={"fontWeight": "bold"}),
         dcc.Checklist(

@@ -103,7 +103,7 @@ def _controls_row():
             ),
         ]),
         html.Div([
-            html.Label("Velocity overlay (normalized to t=0)",
+            html.Label("Price overlay (normalized to t=0)",
                        style={"fontWeight": "bold", "fontSize": "11px"}),
             dcc.Dropdown(
                 id="r3bv-velocity-overlay",
@@ -183,29 +183,61 @@ def _empty_fig(text: str = "Load historical data to view") -> go.Figure:
     return fig
 
 
-def _build_volume(strikes, day, smooth_w):
+def _build_volume(strikes, day, smooth_w, overlay=None):
     if not strikes or day is None:
         return _empty_fig()
-    fig = go.Figure()
+    overlay = list(overlay or [])
+    use_secondary = len(overlay) > 0
+    if use_secondary:
+        fig = make_subplots(specs=[[{"secondary_y": True}]])
+    else:
+        fig = go.Figure()
     smooth_w = max(int(smooth_w or 1), 1)
     for k in strikes:
         df = _load_strike(k, day)
         if df.empty or "bid_volume_1" not in df.columns: continue
         sm = df["bid_volume_1"].rolling(smooth_w, min_periods=1).mean()
         color = STRIKE_COLORS.get(k, "#444")
-        fig.add_trace(go.Scatter(
+        trace = go.Scatter(
             x=sm.index, y=sm.values, mode="lines",
             name=f"VEV_{k} bid_vol_1 (sm{smooth_w})",
             line={"color": color, "width": 1.5},
-        ))
+        )
+        if use_secondary:
+            fig.add_trace(trace, secondary_y=False)
+        else:
+            fig.add_trace(trace)
+
+    # Normalized price overlays — raw mid_price minus its first observation,
+    # so every overlay starts at 0 at the first available timestamp. Rendered
+    # on a secondary y-axis, independent of the bid-volume y-scale.
+    for i, prod in enumerate(overlay):
+        odf = _load_target(prod, day)
+        if odf.empty or "mid_price" not in odf.columns: continue
+        mid = odf["mid_price"].astype(float).dropna()
+        if mid.empty: continue
+        norm = mid - mid.iloc[0]
+        color = OVERLAY_PALETTE[i % len(OVERLAY_PALETTE)]
+        fig.add_trace(go.Scatter(
+            x=norm.index, y=norm.values, mode="lines",
+            name=f"{prod} Δmid (norm)",
+            line={"color": color, "width": 1.2, "dash": "dot"},
+        ), secondary_y=True)
+
     fig.update_layout(
-        title=f"Bid volume (level 1) — Day {day}, smoothed over {smooth_w} ticks",
-        xaxis_title="timestamp", yaxis_title="bid_volume_1",
-        margin={"l": 50, "r": 10, "t": 40, "b": 40},
+        title=f"Bid volume (level 1) — Day {day}, smoothed over {smooth_w} ticks"
+              + ("  +  normalized price overlay" if use_secondary else ""),
+        xaxis_title="timestamp",
+        margin={"l": 50, "r": 50 if use_secondary else 10, "t": 40, "b": 40},
         plot_bgcolor="white", legend={"orientation": "h", "y": -0.15},
     )
     fig.update_xaxes(showgrid=True, gridcolor="#eee")
-    fig.update_yaxes(showgrid=True, gridcolor="#eee")
+    if use_secondary:
+        fig.update_yaxes(title_text="bid_volume_1", secondary_y=False,
+                         showgrid=True, gridcolor="#eee")
+        fig.update_yaxes(title_text="Δmid (from t=0)", secondary_y=True)
+    else:
+        fig.update_yaxes(title_text="bid_volume_1", showgrid=True, gridcolor="#eee")
     return fig
 
 
@@ -370,11 +402,12 @@ def register_callbacks(app):
         Output("r3bv-volume-chart", "figure"),
         [Input("r3bv-strike-multi", "value"),
          Input("hist-day-selector", "value"),
-         Input("r3bv-smooth-window", "value")],
+         Input("r3bv-smooth-window", "value"),
+         Input("r3bv-velocity-overlay", "value")],
     )
-    def _vol(strikes, day, smooth):
+    def _vol(strikes, day, smooth, overlay):
         if not historical_store.is_loaded(): raise PreventUpdate
-        return _build_volume(strikes, day, smooth)
+        return _build_volume(strikes, day, smooth, overlay)
 
     @app.callback(
         Output("r3bv-velocity-chart", "figure"),
