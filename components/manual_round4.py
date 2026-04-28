@@ -70,7 +70,7 @@ INSTRUMENTS = [
 
 CONTAINER_STYLE = {
     "display": "grid",
-    "gridTemplateRows": "26vh 32vh 22vh 22vh",
+    "gridTemplateRows": "26vh 32vh 22vh 22vh 32vh",
     "gap": "2px",
     "height": "100%",
 }
@@ -219,25 +219,15 @@ def _build_fresh_history_chart(history):
     return fig
 
 
-def _portfolio_optimize(payoffs, bids, asks, limits, lambda_risk):
-    """Mean-variance portfolio. Maximizes μᵀq − λ qᵀΣq with box constraints.
+def _solve_qp(mu, Sigma, limits, lam):
+    """Box-constrained QP: max μᵀq - λ qᵀΣq, -limits ≤ q ≤ limits.
 
-    μ = (fair − mid) × 3000           per-unit expected $-edge
-    Σ = Cov(payoffs) / 100 × 3000²    covariance of 100-sim marks
-
-    Uses scipy L-BFGS-B for proper box-constrained QP, starting from the
-    max-edge corner so λ→0 gracefully degrades to sign(μ)×limit.
-    Tiny positions (|q| < 0.5) zeroed since spread would dominate edge.
+    L-BFGS-B from max-edge corner so λ→0 ≡ sign(μ)×limit. Tiny positions
+    (|q|<0.5) zeroed; spread otherwise dominates edge.
     """
     from scipy.optimize import minimize, Bounds
-    bids_arr = np.asarray(bids, dtype=float)
-    asks_arr = np.asarray(asks, dtype=float)
     lim_arr = np.asarray(limits, dtype=float)
-    fair = payoffs.mean(axis=1)
-    mu = (fair - 0.5 * (bids_arr + asks_arr)) * CONTRACT_SIZE
-    Sigma = np.cov(payoffs) * (CONTRACT_SIZE ** 2) / SCORING_N_SIMS
-
-    lam = max(float(lambda_risk), 0.0)
+    lam = max(float(lam), 0.0)
     x0 = np.where(mu > 0, lim_arr, np.where(mu < 0, -lim_arr, 0.0))
     if lam < 1e-15:
         q = x0
@@ -253,9 +243,161 @@ def _portfolio_optimize(payoffs, bids, asks, limits, lambda_risk):
         result = minimize(neg_obj, x0=x0, jac=neg_grad, method="L-BFGS-B",
                           bounds=bounds, options={"maxiter": 200, "ftol": 1e-9})
         q = result.x
-
     q = np.where(np.abs(q) < 0.5, 0.0, q)
-    return np.round(q).astype(int).tolist()
+    return np.round(q).astype(int)
+
+
+def _mu_sigma_from_payoffs(payoffs, bids, asks):
+    bids_arr = np.asarray(bids, dtype=float)
+    asks_arr = np.asarray(asks, dtype=float)
+    fair = payoffs.mean(axis=1)
+    mu = (fair - 0.5 * (bids_arr + asks_arr)) * CONTRACT_SIZE
+    Sigma = np.cov(payoffs) * (CONTRACT_SIZE ** 2) / SCORING_N_SIMS
+    return mu, Sigma
+
+
+def _portfolio_optimize(payoffs, bids, asks, limits, lambda_risk):
+    """Mean-variance portfolio. Maximizes μᵀq − λ qᵀΣq with box constraints.
+
+    μ = (fair − mid) × 3000           per-unit expected $-edge
+    Σ = Cov(payoffs) / 100 × 3000²    covariance of 100-sim marks
+    """
+    mu, Sigma = _mu_sigma_from_payoffs(payoffs, bids, asks)
+    return _solve_qp(mu, Sigma, limits, lambda_risk).tolist()
+
+
+def _run_mvo_analysis(s0, sigma, n_sims_calib, seed_calib,
+                      lambda_min, lambda_max, lambda_step,
+                      n_batches, scoring_seed):
+    """Sweep λ, optimize at each, score with fresh batches (common RNs across λ).
+
+    Calibration MC drives optimization (μ, Σ). Scoring pool is N independent
+    100-sim batches drawn once and shared across all λ values — the "common
+    random numbers" trick eliminates MC noise from λ-vs-λ comparisons, so
+    the SD across batches reflects strategy stability rather than path luck.
+    """
+    payoffs_calib, _, _ = _all_payoffs(s0, sigma, n_sims_calib, seed_calib)
+    bids = [i["bid"] for i in INSTRUMENTS]
+    asks = [i["ask"] for i in INSTRUMENTS]
+    limits = [i["limit"] for i in INSTRUMENTS]
+    bids_arr = np.array(bids, dtype=float)
+    asks_arr = np.array(asks, dtype=float)
+    mu, Sigma = _mu_sigma_from_payoffs(payoffs_calib, bids_arr, asks_arr)
+
+    n_inst = len(INSTRUMENTS)
+    n_batches = max(int(n_batches), 2)
+    n_scoring = n_batches * SCORING_N_SIMS
+    z = _z_for_seed(scoring_seed, n_scoring, WEEKS_3_STEPS)
+    log_paths_score = _log_paths(z, sigma)
+    paths_score = _paths(s0, log_paths_score)
+    payoffs_score = _payoffs_from_paths(paths_score)
+    payoffs_batched = payoffs_score.reshape(n_inst, n_batches, SCORING_N_SIMS)
+    batch_marks = payoffs_batched.mean(axis=2)  # (n_inst, n_batches)
+
+    lambdas = np.round(np.arange(lambda_min, lambda_max + 1e-9, lambda_step), 4)
+    n_lam = len(lambdas)
+    avg_pnl = np.zeros(n_lam)
+    std_pnl = np.zeros(n_lam)
+    qty_count = np.zeros(n_lam, dtype=int)
+    qty_log = []
+
+    for i, log_lam in enumerate(lambdas):
+        lam = 10.0 ** float(log_lam)
+        q = _solve_qp(mu, Sigma, limits, lam).astype(float)
+        exec_prices = np.where(q > 0, asks_arr, np.where(q < 0, bids_arr, 0.0))
+        per_inst_per_batch = (batch_marks.T - exec_prices) * q * CONTRACT_SIZE
+        per_batch_pnl = per_inst_per_batch.sum(axis=1)
+        avg_pnl[i] = float(per_batch_pnl.mean())
+        std_pnl[i] = float(per_batch_pnl.std(ddof=1))
+        qty_count[i] = int(np.sum(np.abs(q) > 0))
+        qty_log.append(q.astype(int).tolist())
+    return lambdas, avg_pnl, std_pnl, qty_count, qty_log
+
+
+def _build_mvo_analysis_fig(lambdas, avg_pnl, std_pnl, qty_count, n_batches):
+    fig = go.Figure()
+    if len(lambdas) == 0:
+        fig.add_annotation(
+            text="Click 'Run full λ analysis' to sweep risk aversion.",
+            x=0.5, y=0.5, xref="paper", yref="paper",
+            showarrow=False, font={"size": 13, "color": "#666"},
+        )
+        fig.update_layout(
+            title="Full λ sweep (MVO)",
+            xaxis_title="log10(λ)",
+            yaxis_title="PnL ($)",
+            template="plotly_white",
+            margin={"l": 60, "r": 60, "t": 40, "b": 60},
+        )
+        return fig
+
+    avg_pnl = np.asarray(avg_pnl, dtype=float)
+    std_pnl = np.asarray(std_pnl, dtype=float)
+    qty_count = np.asarray(qty_count, dtype=int)
+    upper = avg_pnl + std_pnl
+    lower = avg_pnl - std_pnl
+
+    fig.add_trace(go.Scatter(
+        x=list(lambdas) + list(lambdas[::-1]),
+        y=list(upper) + list(lower[::-1]),
+        fill="toself",
+        fillcolor="rgba(31,119,180,0.18)",
+        line={"color": "rgba(0,0,0,0)"},
+        name="±1 SD across batches",
+        hoverinfo="skip",
+    ))
+    fig.add_trace(go.Scatter(
+        x=lambdas, y=avg_pnl,
+        mode="lines+markers",
+        line={"color": "#1f77b4", "width": 2.2},
+        marker={"size": 4},
+        name="Avg PnL across batches",
+        customdata=np.column_stack([std_pnl, qty_count]),
+        hovertemplate=("log10(λ)=%{x:.1f}<br>"
+                       "Avg PnL=$%{y:,.0f}<br>"
+                       "SD=$%{customdata[0]:,.0f}<br>"
+                       "n positions=%{customdata[1]:.0f}"
+                       "<extra></extra>"),
+    ))
+    fig.add_trace(go.Scatter(
+        x=lambdas, y=std_pnl,
+        mode="lines",
+        line={"color": "#d62728", "width": 1.5, "dash": "dot"},
+        yaxis="y2",
+        name="SD across batches (right axis)",
+        hovertemplate="log10(λ)=%{x:.1f}<br>SD=$%{y:,.0f}<extra></extra>",
+    ))
+
+    best_mean_i = int(np.argmax(avg_pnl))
+    sharpe = np.where(std_pnl > 1e-6, avg_pnl / std_pnl, 0.0)
+    best_sharpe_i = int(np.argmax(sharpe))
+
+    fig.add_vline(x=float(lambdas[best_mean_i]),
+                  line={"color": "#2ca02c", "dash": "dot"},
+                  annotation_text=f"max avg @ {lambdas[best_mean_i]:.1f}",
+                  annotation_position="top left",
+                  annotation_font={"color": "#2ca02c", "size": 10})
+    if best_sharpe_i != best_mean_i:
+        fig.add_vline(x=float(lambdas[best_sharpe_i]),
+                      line={"color": "#9467bd", "dash": "dash"},
+                      annotation_text=f"max Sharpe @ {lambdas[best_sharpe_i]:.1f}",
+                      annotation_position="bottom right",
+                      annotation_font={"color": "#9467bd", "size": 10})
+    fig.add_hline(y=0, line={"color": "#333", "width": 1})
+
+    fig.update_layout(
+        title=(f"λ sweep: avg PnL ± SD across {n_batches} fresh 100-sim batches "
+               "(common random numbers)"),
+        xaxis_title="log10(λ) — left = pure return, right = max hedge",
+        yaxis_title="Avg PnL ($)",
+        yaxis2={"title": "SD across batches ($)",
+                "overlaying": "y", "side": "right",
+                "showgrid": False, "color": "#d62728"},
+        template="plotly_white",
+        margin={"l": 60, "r": 60, "t": 40, "b": 60},
+        legend={"orientation": "h", "y": -0.22},
+    )
+    return fig
 
 
 def _format_score_display(history, latest):
@@ -397,13 +539,43 @@ def controls_layout():
         ),
         html.Label("Risk aversion λ (log10 scale)",
                    style={"fontSize": "11px", "marginTop": "8px"}),
-        dcc.Slider(id="r4-risk-lambda", min=-12, max=-3, step=0.25, value=-7,
+        dcc.Slider(id="r4-risk-lambda", min=-12, max=-3, step=0.01, value=-7,
                    marks={-12: "0", -10: "-10", -8: "-8", -6: "-6", -4: "-4",
                           -3: "high"},
-                   tooltip={"placement": "bottom"}),
+                   tooltip={"placement": "bottom", "always_visible": False}),
+        html.Div(style={"display": "flex", "gap": "4px", "alignItems": "center",
+                        "marginTop": "4px"}, children=[
+            html.Label("λ exact:", style={"fontSize": "11px"}),
+            dcc.Input(id="r4-risk-lambda-input", type="number",
+                      min=-12, max=-3, step=0.001, value=-7, debounce=True,
+                      style={"width": "70px", "fontSize": "11px"}),
+        ]),
         html.Button("Optimize portfolio", id="r4-preset-mvo", n_clicks=0,
                     style={"fontSize": "11px", "padding": "4px 8px",
                            "marginTop": "6px", "width": "100%"}),
+
+        html.Div(style={"marginTop": "10px", "padding": "6px",
+                        "background": "#f9f9f9", "borderRadius": "4px"},
+                 children=[
+            html.B("Full λ sweep", style={"fontSize": "11px"}),
+            html.Div(
+                "For each λ in [-12,-3] step 0.1: optimizes portfolio, "
+                "scores N fresh 100-sim batches (common random numbers across λ). "
+                "Plots avg PnL ± SD across those N batches.",
+                style={"fontSize": "10px", "color": "#666", "marginTop": "4px"},
+            ),
+            html.Label("Batches per λ", style={"fontSize": "11px", "marginTop": "6px"}),
+            dcc.Slider(id="r4-mvo-analysis-batches", min=5, max=30, step=1, value=10,
+                       marks={5: "5", 10: "10", 20: "20", 30: "30"},
+                       tooltip={"placement": "bottom"}),
+            html.Button("Run full λ analysis", id="r4-mvo-analysis-run", n_clicks=0,
+                        style={"fontSize": "11px", "padding": "4px 8px",
+                               "marginTop": "6px", "width": "100%"}),
+            html.Div(id="r4-mvo-analysis-status", style={
+                "fontSize": "10px", "color": "#666", "marginTop": "4px",
+            }),
+        ]),
+        dcc.Store(id="r4-mvo-analysis-data", data=None),
 
         html.Hr(),
         html.B("Realized score (fresh 100-sim)"),
@@ -459,6 +631,10 @@ def charts_layout():
             ]),
             html.Div(dcc.Graph(id="r4-fresh-history-chart", style={"height": "100%"}),
                      style={"border": "1px solid #ddd", "borderRadius": "4px"}),
+            html.Div(dcc.Loading(
+                dcc.Graph(id="r4-mvo-analysis-chart", style={"height": "100%"}),
+                type="default",
+            ), style={"border": "1px solid #ddd", "borderRadius": "4px"}),
         ],
     )
 
@@ -909,3 +1085,93 @@ def register_callbacks(app):
     )
     def render_fresh_history_chart(fresh_hist):
         return _build_fresh_history_chart(fresh_hist or [])
+
+    @app.callback(
+        [Output("r4-risk-lambda", "value"),
+         Output("r4-risk-lambda-input", "value")],
+        [Input("r4-risk-lambda", "value"),
+         Input("r4-risk-lambda-input", "value")],
+        prevent_initial_call=True,
+    )
+    def sync_risk_lambda(slider_val, input_val):
+        ctx = callback_context
+        if not ctx.triggered:
+            return no_update, no_update
+        src = ctx.triggered[0]["prop_id"].split(".")[0]
+        if src == "r4-risk-lambda":
+            if slider_val is None:
+                return no_update, no_update
+            return no_update, float(slider_val)
+        if src == "r4-risk-lambda-input":
+            if input_val is None:
+                return no_update, no_update
+            v = max(min(float(input_val), -3.0), -12.0)
+            return v, no_update
+        return no_update, no_update
+
+    @app.callback(
+        [Output("r4-mvo-analysis-data", "data"),
+         Output("r4-mvo-analysis-status", "children")],
+        Input("r4-mvo-analysis-run", "n_clicks"),
+        [State("r4-s0", "value"),
+         State("r4-sigma", "value"),
+         State("r4-n-sims", "value"),
+         State("r4-seed", "value"),
+         State("r4-mvo-analysis-batches", "value")],
+        prevent_initial_call=True,
+    )
+    def run_mvo_analysis(n_clicks, s0, sigma, n_sims, seed_calib, n_batches):
+        s0 = float(s0) if s0 not in (None, "") else S0_DEFAULT
+        sigma = (float(sigma) if sigma not in (None, "") and float(sigma) > 0
+                 else SIGMA_ANN_DEFAULT)
+        n_sims = max(int(n_sims or 10000), 1000)
+        seed_calib = int(seed_calib or 0)
+        n_batches = max(int(n_batches or 10), 2)
+
+        scoring_seed = (seed_calib * 7919 + int(n_clicks or 0) * 31337
+                        + 13) % 1_000_000
+
+        lambdas, avg_pnl, std_pnl, qty_count, _qty_log = _run_mvo_analysis(
+            s0, sigma, n_sims, seed_calib,
+            -12.0, -3.0, 0.1, n_batches, scoring_seed,
+        )
+        data = {
+            "lambdas": lambdas.tolist(),
+            "avg_pnl": avg_pnl.tolist(),
+            "std_pnl": std_pnl.tolist(),
+            "qty_count": qty_count.tolist(),
+            "n_batches": int(n_batches),
+        }
+        best_i = int(np.argmax(avg_pnl))
+        sharpe = np.where(np.array(std_pnl) > 1e-6,
+                          np.array(avg_pnl) / np.array(std_pnl), 0.0)
+        sharpe_i = int(np.argmax(sharpe))
+        status = html.Div([
+            html.Div(f"Done: {len(lambdas)} λ × {n_batches} batches."),
+            html.Div([
+                html.Span(f"Max avg @ log10(λ)={lambdas[best_i]:.1f}: "),
+                html.B(f"${avg_pnl[best_i]:,.0f}"),
+                html.Span(f" ± ${std_pnl[best_i]:,.0f}"),
+            ]),
+            html.Div([
+                html.Span(f"Max Sharpe @ log10(λ)={lambdas[sharpe_i]:.1f}: "),
+                html.B(f"${avg_pnl[sharpe_i]:,.0f}"),
+                html.Span(f" ± ${std_pnl[sharpe_i]:,.0f}"),
+            ]),
+        ])
+        return data, status
+
+    @app.callback(
+        Output("r4-mvo-analysis-chart", "figure"),
+        Input("r4-mvo-analysis-data", "data"),
+    )
+    def render_mvo_analysis_chart(data):
+        if not data:
+            return _build_mvo_analysis_fig([], [], [], [], 0)
+        return _build_mvo_analysis_fig(
+            np.array(data["lambdas"]),
+            np.array(data["avg_pnl"]),
+            np.array(data["std_pnl"]),
+            np.array(data["qty_count"]),
+            data["n_batches"],
+        )
