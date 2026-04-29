@@ -89,6 +89,47 @@ def layout():
             style={"fontSize": "12px"},
         ),
         html.Br(),
+        html.Label("Product Price Overlay", style={"fontWeight": "bold"}),
+        html.Div(
+            "Mid-price lines of other products on the same chart",
+            style={"fontSize": "11px", "color": "#666", "marginBottom": "4px"},
+        ),
+        dcc.Dropdown(
+            id="product-overlay-list",
+            multi=True,
+            placeholder="Select products to overlay mids…",
+            style={"fontSize": "12px"},
+        ),
+        dcc.RadioItems(
+            id="product-overlay-mode",
+            options=[
+                {"label": "Rebased (shifted to start at main mid)", "value": "rebased"},
+                {"label": "Right axis (raw prices on y2)", "value": "y2"},
+            ],
+            value="rebased",
+            style={"fontSize": "12px", "marginTop": "4px"},
+            inputStyle={"marginRight": "4px"},
+            labelStyle={"display": "block"},
+        ),
+        dcc.Checklist(
+            id="product-overlay-sum-toggle",
+            options=[{"label": "Show sum of overlay mids", "value": "show"}],
+            value=[],
+            style={"fontSize": "12px", "marginTop": "4px"},
+            inputStyle={"marginRight": "4px"},
+        ),
+        dcc.Checklist(
+            id="product-overlay-spread-toggle",
+            options=[
+                {"label": "Show spread (current − first overlay)", "value": "show"},
+                {"label": "Absolute value", "value": "abs"},
+            ],
+            value=[],
+            style={"fontSize": "12px", "marginTop": "4px"},
+            inputStyle={"marginRight": "4px"},
+            labelStyle={"display": "block"},
+        ),
+        html.Br(),
         html.Label("Volume Filter", style={"fontWeight": "bold"}),
         dcc.Checklist(
             id="volume-our-trades-toggle",
@@ -140,6 +181,13 @@ def register_callbacks(app):
         Input("product-selector", "options"),
     )
     def populate_overlay_products(product_options):
+        return product_options or []
+
+    @app.callback(
+        Output("product-overlay-list", "options"),
+        Input("product-selector", "options"),
+    )
+    def populate_product_overlay(product_options):
         return product_options or []
 
     @app.callback(

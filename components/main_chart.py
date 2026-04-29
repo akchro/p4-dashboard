@@ -152,13 +152,17 @@ def register_callbacks(app):
          Input("dashboard-wallmid-toggle", "value"),
          Input("bull-signal-toggle", "value"),
          Input("r3-overlay-products", "value"),
+         Input("product-overlay-list", "value"),
+         Input("product-overlay-mode", "value"),
+         Input("product-overlay-sum-toggle", "value"),
+         Input("product-overlay-spread-toggle", "value"),
          Input("trader-toggles", "value"),
          Input("live-zscore-toggle", "value"),
          Input("live-zscore-mean", "value"),
          Input("live-zscore-entry", "value"),
          Input("live-zscore-exit", "value")],
     )
-    def update_main_chart(product, day, downsample, levels, trade_toggle, qty_range, qty_exact, wallmid_toggle, dashboard_wallmid_toggle, bull_signal_toggle, overlay_products, selected_traders, zscore_toggle, zscore_mu, zscore_entry, zscore_exit):
+    def update_main_chart(product, day, downsample, levels, trade_toggle, qty_range, qty_exact, wallmid_toggle, dashboard_wallmid_toggle, bull_signal_toggle, overlay_products, overlay_list, overlay_mode, overlay_sum_toggle, overlay_spread_toggle, selected_traders, zscore_toggle, zscore_mu, zscore_entry, zscore_exit):
         if not product or not store.is_loaded():
             raise PreventUpdate
 
@@ -305,6 +309,115 @@ def register_callbacks(app):
                         ))
 
         need_yaxis2 = False
+
+        # Product price overlay — mid-price lines of other products on the same chart.
+        # rebased: shifted so each starts at the main product's first mid (shape comparison)
+        # raw:     plotted on the main y-axis alongside the current product
+        if overlay_list:
+            main_first = None
+            if overlay_mode == "rebased":
+                main_mid = acts["mid_price"].dropna() if "mid_price" in acts.columns else pd.Series(dtype=float)
+                if not main_mid.empty:
+                    main_first = float(main_mid.iloc[0])
+            sum_panel = None
+            for i, op in enumerate(overlay_list):
+                if op == product:
+                    continue
+                op_acts = store.get_activities(op, day)
+                if op_acts.empty:
+                    continue
+                if downsample and downsample > 1:
+                    op_acts = op_acts.iloc[::downsample]
+                op_mid = op_acts.dropna(subset=["mid_price"])
+                if op_mid.empty:
+                    continue
+                color = OVERLAY_COLORS[i % len(OVERLAY_COLORS)]
+                if overlay_mode == "rebased" and main_first is not None:
+                    shift = main_first - float(op_mid["mid_price"].iloc[0])
+                    ys = op_mid["mid_price"] + shift
+                    fig.add_trace(go.Scatter(
+                        x=op_mid["timestamp"], y=ys,
+                        mode="lines", name=f"{op} (rebased {shift:+.1f})",
+                        line={"color": color, "width": 2, "dash": "dash"},
+                        connectgaps=False,
+                        customdata=op_mid["mid_price"],
+                        hovertemplate=(
+                            "t=%{x}<br>rebased=%{y:.2f}<br>"
+                            "actual mid=%{customdata:.2f}"
+                            f"<extra>{op}</extra>"
+                        ),
+                    ))
+                else:
+                    fig.add_trace(go.Scatter(
+                        x=op_mid["timestamp"], y=op_mid["mid_price"],
+                        mode="lines", name=op,
+                        line={"color": color, "width": 2, "dash": "dash"},
+                        connectgaps=False,
+                        hovertemplate=f"t=%{{x}}<br>mid=%{{y:.2f}}<extra>{op}</extra>",
+                    ))
+
+                # Accumulate aligned panel for the sum overlay (timestamp-merged)
+                if overlay_sum_toggle and "show" in overlay_sum_toggle:
+                    col = op_mid[["timestamp", "mid_price"]].rename(
+                        columns={"mid_price": op})
+                    sum_panel = col if sum_panel is None else sum_panel.merge(
+                        col, on="timestamp", how="outer")
+
+            # Sum-of-overlay-mids line — only timestamps where every selected
+            # overlay product has data (inner-merge semantics via dropna).
+            if (overlay_sum_toggle and "show" in overlay_sum_toggle
+                    and sum_panel is not None and len(sum_panel.columns) > 1):
+                s = sum_panel.sort_values("timestamp").dropna()
+                if not s.empty:
+                    n_legs = len(s.columns) - 1
+                    ts = s["timestamp"]
+                    total = s.drop(columns="timestamp").sum(axis=1)
+                    if overlay_mode == "rebased" and main_first is not None:
+                        shift = main_first - float(total.iloc[0])
+                        ys = total + shift
+                        fig.add_trace(go.Scatter(
+                            x=ts, y=ys, mode="lines",
+                            name=f"Σ overlay mids · {n_legs} legs (rebased {shift:+.1f})",
+                            line={"color": "#000000", "width": 2.5},
+                            customdata=total,
+                            hovertemplate=(
+                                "t=%{x}<br>rebased Σ=%{y:.2f}<br>"
+                                "actual Σ=%{customdata:.2f}"
+                                "<extra>Σ overlay</extra>"
+                            ),
+                        ))
+                    else:
+                        fig.add_trace(go.Scatter(
+                            x=ts, y=total, mode="lines",
+                            name=f"Σ overlay mids · {n_legs} legs",
+                            line={"color": "#000000", "width": 2.5},
+                            hovertemplate="t=%{x}<br>Σ=%{y:.2f}<extra>Σ overlay</extra>",
+                        ))
+
+        # Spread trace: current_product_mid - first_overlay_mid, timestamp-merged
+        if (overlay_spread_toggle and "show" in overlay_spread_toggle
+                and overlay_list):
+            first_op = next((o for o in overlay_list if o != product), None)
+            if first_op is not None and "mid_price" in acts.columns:
+                op_acts = store.get_activities(first_op, day)
+                if not op_acts.empty:
+                    if downsample and downsample > 1:
+                        op_acts = op_acts.iloc[::downsample]
+                    main_mid = acts[["timestamp", "mid_price"]].dropna(subset=["mid_price"])
+                    op_mid = op_acts[["timestamp", "mid_price"]].dropna(subset=["mid_price"])
+                    merged = main_mid.merge(op_mid, on="timestamp", suffixes=("_main", "_op"))
+                    if not merged.empty:
+                        spread = merged["mid_price_main"].values - merged["mid_price_op"].values
+                        is_abs = "abs" in overlay_spread_toggle
+                        ys = abs(spread) if is_abs else spread
+                        label = (f"|spread|: |{product} − {first_op}|"
+                                 if is_abs else f"spread: {product} − {first_op}")
+                        fig.add_trace(go.Scatter(
+                            x=merged["timestamp"], y=ys, mode="lines",
+                            name=label,
+                            line={"color": "#FF6F00", "width": 2, "dash": "dot"},
+                            hovertemplate=f"t=%{{x}}<br>{'|spread|' if is_abs else 'spread'}=%{{y:.2f}}<extra></extra>",
+                        ))
 
         # Bull-signal up-arrows pinned to ask_price_1 of the displayed product
         # (signal is global; the y-anchor is per-product so the marker sits on

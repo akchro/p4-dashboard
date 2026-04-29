@@ -8,7 +8,8 @@ from components import (
     historical_filters, historical_performance,
 )
 from components import manual_controls, manual_round2, manual_round3, manual_round4
-from components import options_live, options_historical, r3_bid_velocity, historical_player_pnl
+from components import options_live, options_historical, historical_player_pnl
+from components import r5_spread_live, r5_spread_hist
 from components import zscore_overlay
 
 app = Dash(__name__)
@@ -48,6 +49,7 @@ live_tab = html.Div(style={
         dcc.Tabs(id="live-subtabs", value="trading", children=[
             dcc.Tab(label="Trading", value="trading", children=[live_trading_content]),
             dcc.Tab(label="Options", value="options", children=[options_live.layout()]),
+            dcc.Tab(label="Round 5", value="r5", children=[r5_spread_live.layout()]),
         ], style={"height": "36px"}),
     ]),
     html.Div(style={
@@ -90,7 +92,7 @@ historical_tab = html.Div(style={
             dcc.Tab(label="Trading", value="trading", children=[historical_trading_content]),
             dcc.Tab(label="Options", value="options", children=[options_historical.layout()]),
             dcc.Tab(label="Player PnL", value="player_pnl", children=[historical_player_pnl.layout()]),
-            dcc.Tab(label="R3 Bid Velocity", value="r3bv", children=[r3_bid_velocity.layout()]),
+            dcc.Tab(label="Round 5", value="r5", children=[r5_spread_hist.layout()]),
         ], style={"height": "36px"}),
     ]),
     html.Div(style={
@@ -150,8 +152,8 @@ for module in [historical_controls, historical_chart, historical_volume,
                historical_filters, historical_performance]:
     module.register_callbacks(app)
 
-for module in [options_live, options_historical, r3_bid_velocity, historical_player_pnl,
-               zscore_overlay]:
+for module in [options_live, options_historical, historical_player_pnl,
+               r5_spread_live, r5_spread_hist, zscore_overlay]:
     module.register_callbacks(app)
 
 for module in [manual_controls, manual_round2, manual_round3, manual_round4]:
