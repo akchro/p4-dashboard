@@ -152,6 +152,7 @@ def register_callbacks(app):
          Input("dashboard-wallmid-toggle", "value"),
          Input("bull-signal-toggle", "value"),
          Input("r3-overlay-products", "value"),
+         Input("r3-overlay-points-toggle", "value"),
          Input("product-overlay-list", "value"),
          Input("product-overlay-mode", "value"),
          Input("product-overlay-sum-toggle", "value"),
@@ -162,7 +163,7 @@ def register_callbacks(app):
          Input("live-zscore-entry", "value"),
          Input("live-zscore-exit", "value")],
     )
-    def update_main_chart(product, day, downsample, levels, trade_toggle, qty_range, qty_exact, wallmid_toggle, dashboard_wallmid_toggle, bull_signal_toggle, overlay_products, overlay_list, overlay_mode, overlay_sum_toggle, overlay_spread_toggle, selected_traders, zscore_toggle, zscore_mu, zscore_entry, zscore_exit):
+    def update_main_chart(product, day, downsample, levels, trade_toggle, qty_range, qty_exact, wallmid_toggle, dashboard_wallmid_toggle, bull_signal_toggle, overlay_products, overlay_points_toggle, overlay_list, overlay_mode, overlay_sum_toggle, overlay_spread_toggle, selected_traders, zscore_toggle, zscore_mu, zscore_entry, zscore_exit):
         if not product or not store.is_loaded():
             raise PreventUpdate
 
@@ -444,8 +445,13 @@ def register_callbacks(app):
                         customdata=merged["bull"].tolist(),
                     ))
 
-        # R3 trade-time overlays (dotted vertical lines per selected product)
+        # R3 trade-time overlays (dotted vertical lines per selected product;
+        # optional price markers rebased to the main product's first mid).
         if overlay_products:
+            show_points = bool(overlay_points_toggle) and "show" in overlay_points_toggle
+            main_mid_series = (acts["mid_price"].dropna()
+                               if "mid_price" in acts.columns else pd.Series(dtype=float))
+            main_first = float(main_mid_series.iloc[0]) if not main_mid_series.empty else None
             for i, op in enumerate(overlay_products):
                 if op == product:
                     continue  # would just clutter own trades; user already sees them
@@ -463,9 +469,46 @@ def register_callbacks(app):
                     name=f"{op} ({len(ot)})",
                     line={"color": color, "width": 1, "dash": "dot"},
                     yaxis="y2",
+                    legendgroup=op,
                     hoverinfo="skip",
                     showlegend=True,
                 ))
+
+                if show_points:
+                    op_mid_series = pd.Series(dtype=float)
+                    if main_first is not None:
+                        op_acts = store.get_activities(op, day)
+                        if not op_acts.empty and "mid_price" in op_acts.columns:
+                            op_mid_series = op_acts["mid_price"].dropna()
+                    if main_first is not None and not op_mid_series.empty:
+                        shift = main_first - float(op_mid_series.iloc[0])
+                        ys_pts = ot["price"].astype(float) + shift
+                        marker_name = f"{op} trades (rebased {shift:+.1f})"
+                        hover = ("t=%{x}<br>rebased=%{y:.2f}<br>"
+                                 "actual=%{customdata[0]:.2f}<br>"
+                                 "qty=%{customdata[1]}"
+                                 f"<extra>{op}</extra>")
+                        cd = list(zip(ot["price"].astype(float), ot["quantity"]))
+                    else:
+                        ys_pts = ot["price"].astype(float)
+                        marker_name = f"{op} trades (raw)"
+                        hover = ("t=%{x}<br>price=%{y:.2f}<br>"
+                                 "qty=%{customdata}"
+                                 f"<extra>{op}</extra>")
+                        cd = ot["quantity"].tolist()
+                    fig.add_trace(go.Scatter(
+                        x=ot["timestamp"], y=ys_pts,
+                        mode="markers",
+                        name=marker_name,
+                        marker={
+                            "color": color, "symbol": "diamond",
+                            "size": 6, "opacity": 0.65,
+                            "line": {"width": 0.5, "color": "black"},
+                        },
+                        legendgroup=op,
+                        hovertemplate=hover,
+                        customdata=cd,
+                    ))
             need_yaxis2 = True
 
         if need_yaxis2:

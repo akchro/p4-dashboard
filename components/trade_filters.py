@@ -88,6 +88,13 @@ def layout():
             placeholder="Select products to overlay…",
             style={"fontSize": "12px"},
         ),
+        dcc.Checklist(
+            id="r3-overlay-points-toggle",
+            options=[{"label": "Show price markers (rebased to main mid)", "value": "show"}],
+            value=[],
+            style={"fontSize": "12px", "marginTop": "4px"},
+            inputStyle={"marginRight": "4px"},
+        ),
         html.Br(),
         html.Label("Product Price Overlay", style={"fontWeight": "bold"}),
         html.Div(
