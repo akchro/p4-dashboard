@@ -105,13 +105,71 @@ TIMESTAMP_PER_DAY = 1_000_000
 # ---------- Data prep ----------------------------------------------------- #
 
 
+_WIDE_CACHE: dict[tuple, pd.DataFrame] = {}
+
+
+def _activities_df(store) -> pd.DataFrame | None:
+    """Reach into the store's underlying activities frame so we can pivot in
+    one pass. Cache invalidation keys on `id()` of this frame — `load()`
+    replaces it, so cached entries naturally drop out."""
+    data = getattr(store, "_data", None)
+    if not isinstance(data, dict):
+        return None
+    return data.get("activities")
+
+
 def build_wide(store, days: list[int] | None = None) -> pd.DataFrame:
     """Pivot store activities into a wide mid-price matrix.
 
     Index: global tick `t = (day - first_day) * TIMESTAMP_PER_DAY + timestamp`.
     Columns: any of `ALL_PRODUCTS` present in the store. Missing products are
     silently skipped so callers can still reason about the available subset.
+
+    Memoized on (activities-df identity, sorted-days). The Round 5 tab fires
+    6 figure callbacks on load, all asking for the same pivot — recomputing
+    every time is the bulk of the perceived render delay.
     """
+    df_full = _activities_df(store)
+    if df_full is None:
+        # Fallback for stores without `_data`: per-product loop (slow but safe).
+        return _build_wide_slow(store, days)
+    if df_full.empty:
+        return pd.DataFrame()
+
+    days_key = tuple(sorted(int(d) for d in days)) if days else None
+    cache_key = (id(df_full), days_key)
+    cached = _WIDE_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    sub = df_full
+    if days_key is not None:
+        sub = sub[sub["day"].isin(days_key)]
+    sub = sub[sub["product"].isin(ALL_PRODUCTS)]
+    if sub.empty or "mid_price" not in sub.columns:
+        out = pd.DataFrame()
+        _WIDE_CACHE[cache_key] = out
+        return out
+    sub = sub[["product", "day", "timestamp", "mid_price"]].dropna(subset=["mid_price"])
+    if sub.empty:
+        out = pd.DataFrame()
+        _WIDE_CACHE[cache_key] = out
+        return out
+
+    first_day = int(sub["day"].min())
+    t = (sub["day"].to_numpy() - first_day) * TIMESTAMP_PER_DAY + sub["timestamp"].to_numpy()
+    sub = sub.assign(t=t)
+    wide = sub.pivot_table(index="t", columns="product", values="mid_price").sort_index()
+    wide.attrs["first_day"] = first_day
+
+    # Bound cache size — keep a few recent entries, drop the oldest if we overflow.
+    _WIDE_CACHE[cache_key] = wide
+    if len(_WIDE_CACHE) > 8:
+        _WIDE_CACHE.pop(next(iter(_WIDE_CACHE)))
+    return wide
+
+
+def _build_wide_slow(store, days):
     frames = []
     for product in ALL_PRODUCTS:
         df = store.get_activities(product)
@@ -627,6 +685,256 @@ def build_global_svd_figure(wide: pd.DataFrame,
         plot_bgcolor="white",
         height=720,
     )
+    return fig
+
+
+def build_raw_spread_figure(
+    wide: pd.DataFrame,
+    category: str,
+    primary: str,
+    show_lines: list[str] | None = None,
+    show_spreads: list[str] | None = None,
+    show_avg_spread: bool = False,
+    rebase_avg: bool = False,
+) -> go.Figure:
+    """Raw lines + pairwise spreads vs a chosen primary in one batch.
+
+    - Mid-price lines for `primary` (always) plus any product in `show_lines`,
+      drawn on the left y-axis.
+    - Spreads `primary - other` for each product in `show_spreads`, drawn on
+      the right y-axis (so price-scale and spread-scale don't fight).
+    - If `show_avg_spread` is True, the unweighted mean of all selected
+      spreads is overlaid on y2 — only at timestamps where every selected
+      spread is defined (inner-merge semantics).
+    - If `rebase_avg` is also True, the avg spread is shifted by
+      `primary_first - avg_first` and drawn on the primary's y-axis instead,
+      so it can be compared visually to the primary's price level.
+    """
+    if wide.empty:
+        return _empty_fig()
+    if category not in CATEGORIES:
+        return _empty_fig(f"Unknown category: {category}")
+    plist = CATEGORIES[category]
+    if primary not in plist:
+        return _empty_fig(f"{primary} not in {category}")
+    if primary not in wide.columns:
+        return _empty_fig(f"{primary}: missing from store")
+
+    show_lines = list(show_lines or [])
+    show_spreads = list(show_spreads or [])
+
+    fig = go.Figure()
+    line_palette = ["#1f77b4", "#ff7f0e", "#2ca02c", "#9467bd"]
+    spread_palette = ["#17becf", "#bcbd22", "#e377c2", "#8c564b"]
+
+    primary_short = SHORT.get(primary, primary)
+    primary_series = wide[primary].dropna()
+    if not primary_series.empty:
+        fig.add_trace(go.Scatter(
+            x=primary_series.index, y=primary_series.values,
+            mode="lines",
+            name=f"{primary_short} (primary)",
+            line={"color": "#000000", "width": 2},
+            yaxis="y",
+            hovertemplate=f"t=%{{x}}<br>mid=%{{y:.2f}}<extra>{primary_short}</extra>",
+        ))
+
+    others = [p for p in plist if p != primary]
+
+    for i, p in enumerate(others):
+        if p not in show_lines or p not in wide.columns:
+            continue
+        s = wide[p].dropna()
+        if s.empty:
+            continue
+        short = SHORT.get(p, p)
+        fig.add_trace(go.Scatter(
+            x=s.index, y=s.values,
+            mode="lines",
+            name=short,
+            line={"color": line_palette[i % len(line_palette)], "width": 1.5},
+            yaxis="y",
+            hovertemplate=f"t=%{{x}}<br>mid=%{{y:.2f}}<extra>{short}</extra>",
+        ))
+
+    spread_panel: pd.DataFrame | None = None
+    n_avg_legs = 0
+    for i, p in enumerate(others):
+        if p not in show_spreads or p not in wide.columns:
+            continue
+        pair = wide[[primary, p]].dropna()
+        if pair.empty:
+            continue
+        spread = pair[primary] - pair[p]
+        short = SHORT.get(p, p)
+        fig.add_trace(go.Scatter(
+            x=spread.index, y=spread.values,
+            mode="lines",
+            name=f"spread: {primary_short} − {short}",
+            line={"color": spread_palette[i % len(spread_palette)],
+                  "width": 1.5, "dash": "dot"},
+            yaxis="y2",
+            hovertemplate=(f"t=%{{x}}<br>spread=%{{y:.2f}}"
+                           f"<extra>{primary_short} − {short}</extra>"),
+        ))
+        if show_avg_spread:
+            col = spread.to_frame(name=p)
+            spread_panel = col if spread_panel is None else spread_panel.join(
+                col, how="outer")
+            n_avg_legs += 1
+
+    if show_avg_spread and spread_panel is not None and n_avg_legs >= 1:
+        # Inner intersection: only timestamps where every selected spread is defined.
+        avg = spread_panel.dropna().mean(axis=1)
+        if not avg.empty:
+            if rebase_avg and not primary_series.empty:
+                primary_first = float(primary_series.iloc[0])
+                shift = primary_first - float(avg.iloc[0])
+                fig.add_trace(go.Scatter(
+                    x=avg.index, y=avg.values + shift,
+                    mode="lines",
+                    name=f"avg spread · {n_avg_legs} legs (rebased {shift:+.1f})",
+                    line={"color": "#d62728", "width": 2.5},
+                    yaxis="y",
+                    customdata=avg.values,
+                    hovertemplate=(f"t=%{{x}}<br>rebased=%{{y:.2f}}<br>"
+                                   f"actual avg=%{{customdata:.2f}}"
+                                   f"<extra>{n_avg_legs}-leg avg</extra>"),
+                ))
+            else:
+                fig.add_trace(go.Scatter(
+                    x=avg.index, y=avg.values,
+                    mode="lines",
+                    name=f"avg spread · {n_avg_legs} legs",
+                    line={"color": "#d62728", "width": 2.5},
+                    yaxis="y2",
+                    hovertemplate=(f"t=%{{x}}<br>avg=%{{y:.2f}}"
+                                   f"<extra>{n_avg_legs}-leg avg</extra>"),
+                ))
+
+    fig.update_layout(
+        title=(f"{category} — raw mids + pairwise spreads vs {primary_short} "
+               f"(left: price, right: spread)"),
+        xaxis_title="t (global, days × 1e6 + tick)",
+        yaxis={"title": "mid price", "side": "left"},
+        yaxis2={"title": "spread", "side": "right",
+                "overlaying": "y", "showgrid": False, "zeroline": True,
+                "zerolinecolor": "#bbb"},
+        margin={"l": 50, "r": 50, "t": 50, "b": 60},
+        plot_bgcolor="white",
+        legend={"orientation": "h", "y": -0.18},
+    )
+    fig.update_xaxes(showgrid=True, gridcolor="#eee")
+    return fig
+
+
+def build_meanrev_scatter_figure(
+    wide: pd.DataFrame,
+    category: str,
+    primary: str,
+    show_spreads: list[str] | None = None,
+    n_bins: int = 20,
+) -> go.Figure:
+    """Phase scatter testing whether primary mean-reverts to the avg spread.
+
+    avg_spread(t) = primary(t) − mean(selected_others)(t).
+      x = z-score of avg_spread
+      y = primary mid
+      points colored by tick index (time gradient)
+    Overlays the binned conditional mean E[primary | z(avg_spread)] in red.
+    A flat red line means the primary's level is independent of the spread;
+    a clear slope means there's a level relationship to test for reversion.
+    """
+    if wide.empty:
+        return _empty_fig()
+    if category not in CATEGORIES:
+        return _empty_fig(f"Unknown category: {category}")
+    plist = CATEGORIES[category]
+    if primary not in plist:
+        return _empty_fig(f"{primary} not in {category}")
+    if primary not in wide.columns:
+        return _empty_fig(f"{primary}: missing from store")
+
+    show_spreads = list(show_spreads or [])
+    selected = [p for p in plist
+                if p != primary and p in show_spreads and p in wide.columns]
+    if not selected:
+        return _empty_fig("Toggle at least one spread leg above")
+
+    pri = wide[primary]
+    others_mean = wide[selected].mean(axis=1)
+    avg_spread = pri - others_mean
+    df = pd.DataFrame({"primary": pri, "spread": avg_spread}).dropna()
+    if df.empty:
+        return _empty_fig("no overlapping data")
+
+    mu = float(df["spread"].mean())
+    sd = float(df["spread"].std())
+    if sd == 0:
+        return _empty_fig("spread has zero variance")
+    df["z"] = (df["spread"] - mu) / sd
+
+    primary_short = SHORT.get(primary, primary)
+
+    fig = go.Figure()
+    # Color points by tick index → time gradient
+    color_t = np.arange(len(df))
+    fig.add_trace(go.Scatter(
+        x=df["z"], y=df["primary"],
+        mode="markers",
+        name="ticks",
+        marker={
+            "size": 4, "color": color_t, "colorscale": "Viridis",
+            "opacity": 0.5,
+            "colorbar": {"title": "tick", "thickness": 10, "x": 1.02},
+        },
+        customdata=df["spread"],
+        hovertemplate=("z=%{x:.2f}<br>spread=%{customdata:.2f}"
+                       f"<br>{primary_short} mid=%{{y:.2f}}<extra></extra>"),
+    ))
+
+    # Conditional mean (binned)
+    n_bins = max(5, int(n_bins))
+    bins = np.linspace(df["z"].min(), df["z"].max(), n_bins + 1)
+    cats = pd.cut(df["z"], bins, include_lowest=True)
+    binned = df.assign(bin=cats).groupby("bin", observed=True).agg(
+        z_mid=("z", "mean"),
+        y_mean=("primary", "mean"),
+        y_std=("primary", "std"),
+        n=("primary", "count"),
+    ).reset_index(drop=True).dropna(subset=["z_mid", "y_mean"])
+    if not binned.empty:
+        fig.add_trace(go.Scatter(
+            x=binned["z_mid"], y=binned["y_mean"],
+            mode="lines+markers",
+            name=f"E[mid | z] · {n_bins} bins",
+            line={"color": "#d62728", "width": 2.5},
+            marker={"size": 7, "color": "#d62728"},
+            customdata=np.stack([binned["n"], binned["y_std"].fillna(0)], axis=-1),
+            hovertemplate=("z=%{x:.2f}<br>E[mid]=%{y:.2f}<br>"
+                           "σ=%{customdata[1]:.2f}<br>n=%{customdata[0]:d}"
+                           "<extra></extra>"),
+        ))
+        # Linear fit on binned means to summarize the slope (a level dependence
+        # near zero means the primary is independent of the spread).
+        if len(binned) >= 2:
+            slope, intercept = np.polyfit(binned["z_mid"], binned["y_mean"], 1)
+        else:
+            slope, intercept = np.nan, np.nan
+    else:
+        slope = np.nan
+
+    fig.update_layout(
+        title=(f"{primary_short} mid vs avg spread (z-scored, μ={mu:+.2f}, "
+               f"σ={sd:.2f}, n_legs={len(selected)}, slope={slope:+.2f}/z)"),
+        xaxis_title="avg spread (z-score)",
+        yaxis_title=f"{primary_short} mid",
+        plot_bgcolor="white",
+        margin={"l": 50, "r": 30, "t": 50, "b": 50},
+        legend={"orientation": "h", "y": -0.18},
+    )
+    fig.update_xaxes(showgrid=True, gridcolor="#eee", zeroline=True, zerolinecolor="#bbb")
+    fig.update_yaxes(showgrid=True, gridcolor="#eee")
     return fig
 
 

@@ -410,15 +410,31 @@ def register_callbacks(app):
                     if not merged.empty:
                         spread = merged["mid_price_main"].values - merged["mid_price_op"].values
                         is_abs = "abs" in overlay_spread_toggle
-                        ys = abs(spread) if is_abs else spread
-                        label = (f"|spread|: |{product} − {first_op}|"
-                                 if is_abs else f"spread: {product} − {first_op}")
-                        fig.add_trace(go.Scatter(
-                            x=merged["timestamp"], y=ys, mode="lines",
-                            name=label,
-                            line={"color": "#FF6F00", "width": 2, "dash": "dot"},
-                            hovertemplate=f"t=%{{x}}<br>{'|spread|' if is_abs else 'spread'}=%{{y:.2f}}<extra></extra>",
-                        ))
+                        is_rebase = "rebase" in overlay_spread_toggle
+                        raw = abs(spread) if is_abs else spread
+                        base_label = "|spread|" if is_abs else "spread"
+                        pair = (f"|{product} − {first_op}|" if is_abs
+                                else f"{product} − {first_op}")
+                        if is_rebase and len(raw) > 0:
+                            shift = float(merged["mid_price_main"].iloc[0]) - float(raw[0])
+                            ys = raw + shift
+                            fig.add_trace(go.Scatter(
+                                x=merged["timestamp"], y=ys, mode="lines",
+                                name=f"{base_label}: {pair} (rebased {shift:+.1f})",
+                                line={"color": "#FF6F00", "width": 2, "dash": "dot"},
+                                customdata=raw,
+                                hovertemplate=(
+                                    "t=%{x}<br>rebased=%{y:.2f}<br>"
+                                    f"actual {base_label}=%{{customdata:.2f}}<extra></extra>"
+                                ),
+                            ))
+                        else:
+                            fig.add_trace(go.Scatter(
+                                x=merged["timestamp"], y=raw, mode="lines",
+                                name=f"{base_label}: {pair}",
+                                line={"color": "#FF6F00", "width": 2, "dash": "dot"},
+                                hovertemplate=f"t=%{{x}}<br>{base_label}=%{{y:.2f}}<extra></extra>",
+                            ))
 
         # Bull-signal up-arrows pinned to ask_price_1 of the displayed product
         # (signal is global; the y-anchor is per-product so the marker sits on
@@ -446,12 +462,9 @@ def register_callbacks(app):
                     ))
 
         # R3 trade-time overlays (dotted vertical lines per selected product;
-        # optional price markers rebased to the main product's first mid).
+        # optional price markers at raw trade prices on the main y-axis).
         if overlay_products:
             show_points = bool(overlay_points_toggle) and "show" in overlay_points_toggle
-            main_mid_series = (acts["mid_price"].dropna()
-                               if "mid_price" in acts.columns else pd.Series(dtype=float))
-            main_first = float(main_mid_series.iloc[0]) if not main_mid_series.empty else None
             for i, op in enumerate(overlay_products):
                 if op == product:
                     continue  # would just clutter own trades; user already sees them
@@ -475,39 +488,21 @@ def register_callbacks(app):
                 ))
 
                 if show_points:
-                    op_mid_series = pd.Series(dtype=float)
-                    if main_first is not None:
-                        op_acts = store.get_activities(op, day)
-                        if not op_acts.empty and "mid_price" in op_acts.columns:
-                            op_mid_series = op_acts["mid_price"].dropna()
-                    if main_first is not None and not op_mid_series.empty:
-                        shift = main_first - float(op_mid_series.iloc[0])
-                        ys_pts = ot["price"].astype(float) + shift
-                        marker_name = f"{op} trades (rebased {shift:+.1f})"
-                        hover = ("t=%{x}<br>rebased=%{y:.2f}<br>"
-                                 "actual=%{customdata[0]:.2f}<br>"
-                                 "qty=%{customdata[1]}"
-                                 f"<extra>{op}</extra>")
-                        cd = list(zip(ot["price"].astype(float), ot["quantity"]))
-                    else:
-                        ys_pts = ot["price"].astype(float)
-                        marker_name = f"{op} trades (raw)"
-                        hover = ("t=%{x}<br>price=%{y:.2f}<br>"
-                                 "qty=%{customdata}"
-                                 f"<extra>{op}</extra>")
-                        cd = ot["quantity"].tolist()
                     fig.add_trace(go.Scatter(
-                        x=ot["timestamp"], y=ys_pts,
+                        x=ot["timestamp"],
+                        y=ot["price"].astype(float),
                         mode="markers",
-                        name=marker_name,
+                        name=f"{op} trades",
                         marker={
                             "color": color, "symbol": "diamond",
                             "size": 6, "opacity": 0.65,
                             "line": {"width": 0.5, "color": "black"},
                         },
                         legendgroup=op,
-                        hovertemplate=hover,
-                        customdata=cd,
+                        hovertemplate=("t=%{x}<br>price=%{y:.2f}<br>"
+                                       "qty=%{customdata}"
+                                       f"<extra>{op}</extra>"),
+                        customdata=ot["quantity"].tolist(),
                     ))
             need_yaxis2 = True
 

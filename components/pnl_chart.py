@@ -90,6 +90,11 @@ def register_callbacks(app):
         if pivot.empty:
             return go.Figure()
 
+        # Engine writes cumulative PnL across all days; reset each column to
+        # start at 0 within the selected day so the chart shows that day's
+        # contribution rather than the running total.
+        pivot = pivot - pivot.bfill().iloc[0]
+
         if downsample and downsample > 1:
             pivot = pivot.iloc[::downsample]
 

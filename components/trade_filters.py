@@ -90,7 +90,7 @@ def layout():
         ),
         dcc.Checklist(
             id="r3-overlay-points-toggle",
-            options=[{"label": "Show price markers (rebased to main mid)", "value": "show"}],
+            options=[{"label": "Show price markers", "value": "show"}],
             value=[],
             style={"fontSize": "12px", "marginTop": "4px"},
             inputStyle={"marginRight": "4px"},
@@ -130,6 +130,7 @@ def layout():
             options=[
                 {"label": "Show spread (current − first overlay)", "value": "show"},
                 {"label": "Absolute value", "value": "abs"},
+                {"label": "Rebase to main (shifted to start at main mid)", "value": "rebase"},
             ],
             value=[],
             style={"fontSize": "12px", "marginTop": "4px"},
